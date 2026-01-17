@@ -3,27 +3,59 @@ import { motion, AnimatePresence } from "motion/react";
 import ThinkNode from "./ThinkNode";
 import ConnectionLine, { ConnectionGradients } from "./ConnectionLine";
 import FinalOutput from "./FinalOutput";
-import { generateSubtopics, generateFinalContent } from "../services/gemini";
+import {
+  interpretSeed,
+  generateIdeaNodes,
+  clusterIntoDirections,
+  generateSynthesis
+} from "../services/gemini";
 import "./BrainCanvas.css";
 
 // Canvas coordinate system - centered at origin
 const CANVAS_CENTER = { x: 0, y: 0 };
 
+// Stage constants
+const STAGES = {
+  INPUT: 0,
+  SEED: 1,
+  EXPAND: 2,
+  STRUCTURE: 3,
+  SYNTHESIZE: 4
+};
+
+const STAGE_LABELS = ["Input", "Seed", "Expand", "Structure", "Synthesize"];
+
+// Type colors for idea nodes
+const TYPE_COLORS = {
+  problem: "#ef4444",
+  method: "#3b82f6",
+  application: "#10b981",
+  assumption: "#f59e0b",
+  opportunity: "#8b5cf6"
+};
+
 export default function BrainCanvas() {
-  const [rootTopic, setRootTopic] = useState("");
+  // Core state
+  const [currentStage, setCurrentStage] = useState(STAGES.INPUT);
   const [inputValue, setInputValue] = useState("");
-  const [allNodes, setAllNodes] = useState([]); // All nodes in the web
-  const [connections, setConnections] = useState([]); // All connections
+  const [isLoading, setIsLoading] = useState(false);
+  const [error, setError] = useState("");
+
+  // Seed data
+  const [seedData, setSeedData] = useState(null);
+
+  // Canvas state (spider-web)
+  const [allNodes, setAllNodes] = useState([]);
+  const [connections, setConnections] = useState([]);
   const [activeNodeId, setActiveNodeId] = useState(null);
   const [thinkingChain, setThinkingChain] = useState([]);
   const [viewOffset, setViewOffset] = useState({ x: 0, y: 0 });
-  const [isLoading, setIsLoading] = useState(false);
-  const [showFinalOutput, setShowFinalOutput] = useState(false);
-  const [finalContent, setFinalContent] = useState("");
-  const [customInput, setCustomInput] = useState("");
-  const [showCustomInput, setShowCustomInput] = useState(false);
-  const [error, setError] = useState("");
   const canvasRef = useRef(null);
+
+  // Structure & Synthesis
+  const [directions, setDirections] = useState([]);
+  const [synthesis, setSynthesis] = useState(null);
+  const [showFinalOutput, setShowFinalOutput] = useState(false);
 
   // Get viewport center
   const getViewportCenter = useCallback(() => {
@@ -47,7 +79,7 @@ export default function BrainCanvas() {
     const radius = 260 + count * 24;
     const angleSpread = Math.min(Math.PI * 1.2, Math.max(Math.PI * 0.7, count * 0.35));
     const baseAngle = startAngle + Math.PI / 2;
-    
+
     for (let i = 0; i < count; i++) {
       const angle = baseAngle - angleSpread / 2 + (i * angleSpread) / (count - 1 || 1);
       positions.push({
@@ -108,10 +140,10 @@ export default function BrainCanvas() {
   const getParentAngle = useCallback((nodeId) => {
     const node = allNodes.find(n => n.id === nodeId);
     if (!node || !node.parentId) return 0;
-    
+
     const parent = allNodes.find(n => n.id === node.parentId);
     if (!parent) return 0;
-    
+
     return Math.atan2(node.position.y - parent.position.y, node.position.x - parent.position.x);
   }, [allNodes]);
 
@@ -136,42 +168,59 @@ export default function BrainCanvas() {
     return ids;
   }, [activeNodeId, allNodes, chainNodeIds]);
 
-  // Start brainstorming
+  // --- Stage 1: Start with Seed Interpretation ---
   const handleStart = async () => {
     if (!inputValue.trim()) return;
-    
+
     setError("");
     setIsLoading(true);
-    setRootTopic(inputValue);
-    setThinkingChain([inputValue]);
-    
-    const rootNode = {
-      id: "root",
-      topic: inputValue,
-      position: CANVAS_CENTER,
-      isRoot: true,
-      isInChain: true,
-      parentId: null
-    };
-    
-    setAllNodes([rootNode]);
-    setActiveNodeId("root");
-    panToNode(CANVAS_CENTER);
-    
+
     try {
-      const subtopics = await generateSubtopics(inputValue, [inputValue]);
-      const basePositions = calculateRadialPositions(CANVAS_CENTER, subtopics.length, 0);
+      // First interpret the seed
+      const seed = await interpretSeed(inputValue);
+      setSeedData({
+        userInput: inputValue,
+        ...seed
+      });
+
+      // Create root node
+      const rootNode = {
+        id: "root",
+        topic: inputValue,
+        content: inputValue,
+        type: "root",
+        position: CANVAS_CENTER,
+        isRoot: true,
+        isInChain: true,
+        parentId: null
+      };
+
+      setAllNodes([rootNode]);
+      setActiveNodeId("root");
+      setThinkingChain([inputValue]);
+      panToNode(CANVAS_CENTER);
+
+      // Generate initial idea nodes
+      const ideaNodes = await generateIdeaNodes(inputValue, {
+        objective: seed.objective,
+        guiding_questions: seed.guiding_questions
+      });
+
+      const basePositions = calculateRadialPositions(CANVAS_CENTER, ideaNodes.length, 0);
       const positions = resolvePositions(basePositions, [rootNode]);
-      
-      const newNodes = subtopics.map((topic, i) => ({
-        id: `node-${Date.now()}-${i}`,
-        topic,
+
+      const newNodes = ideaNodes.map((idea, i) => ({
+        id: idea.id,
+        topic: idea.content,
+        content: idea.content,
+        type: idea.type,
         position: positions[i],
         isRoot: false,
         isInChain: false,
-        parentId: "root"
+        parentId: "root",
+        expandable: idea.expandable
       }));
-      
+
       const newConnections = newNodes.map(node => ({
         id: `conn-${node.id}`,
         from: CANVAS_CENTER,
@@ -180,60 +229,68 @@ export default function BrainCanvas() {
         toId: node.id,
         isInChain: false
       }));
-      
+
       setAllNodes([rootNode, ...newNodes]);
       setConnections(newConnections);
+      setCurrentStage(STAGES.EXPAND);
     } catch (err) {
-      setError("Failed to generate subtopics. Please try again.");
+      setError("Failed to start brainstorming. Please try again.");
+      console.error(err);
     }
-    
+
     setIsLoading(false);
   };
 
-  // Handle clicking on a node
+  // --- Stage 2: Handle clicking on a node to expand ---
   const handleNodeClick = async (clickedNode) => {
     if (isLoading || clickedNode.isInChain) return;
-    
+
     setError("");
     setIsLoading(true);
-    
+
     // Add to thinking chain
-    const newChain = [...thinkingChain, clickedNode.topic];
+    const newChain = [...thinkingChain, clickedNode.content];
     setThinkingChain(newChain);
-    
+
     // Mark this node as in-chain
-    setAllNodes(prev => prev.map(n => 
+    setAllNodes(prev => prev.map(n =>
       n.id === clickedNode.id ? { ...n, isInChain: true } : n
     ));
-    
+
     // Mark connection to this node as in-chain
-    setConnections(prev => prev.map(c => 
+    setConnections(prev => prev.map(c =>
       c.toId === clickedNode.id ? { ...c, isInChain: true } : c
     ));
-    
+
     setActiveNodeId(clickedNode.id);
-    
-    // Pan to the clicked node
     panToNode(clickedNode.position);
-    
-    // Calculate angle for new subtopics based on incoming direction
+
     const parentAngle = getParentAngle(clickedNode.id);
     const obstacles = getPlacementObstacles(clickedNode.id);
-    
+
     try {
-      const subtopics = await generateSubtopics(clickedNode.topic, newChain);
-      const basePositions = calculateRadialPositions(clickedNode.position, subtopics.length, parentAngle);
+      const ideaNodes = await generateIdeaNodes(clickedNode.content, {
+        objective: seedData?.objective,
+        guiding_questions: seedData?.guiding_questions,
+        parentChain: newChain
+      });
+
+      const basePositions = calculateRadialPositions(clickedNode.position, ideaNodes.length, parentAngle);
       const positions = resolvePositions(basePositions, obstacles);
-      
-      const newNodes = subtopics.map((topic, i) => ({
-        id: `node-${Date.now()}-${i}`,
-        topic,
+
+      const timestamp = Date.now();
+      const newNodes = ideaNodes.map((idea, i) => ({
+        id: `${idea.id}_${timestamp}_${i}`,
+        topic: idea.content,
+        content: idea.content,
+        type: idea.type,
         position: positions[i],
         isRoot: false,
         isInChain: false,
-        parentId: clickedNode.id
+        parentId: clickedNode.id,
+        expandable: idea.expandable
       }));
-      
+
       const newConnections = newNodes.map(node => ({
         id: `conn-${node.id}`,
         from: clickedNode.position,
@@ -242,13 +299,14 @@ export default function BrainCanvas() {
         toId: node.id,
         isInChain: false
       }));
-      
+
       setAllNodes(prev => [...prev, ...newNodes]);
       setConnections(prev => [...prev, ...newConnections]);
     } catch (err) {
-      setError("Failed to generate subtopics. Please try again.");
+      setError("Failed to expand idea. Please try again.");
+      console.error(err);
     }
-    
+
     setIsLoading(false);
   };
 
@@ -256,33 +314,42 @@ export default function BrainCanvas() {
   const handleRegenerate = async () => {
     const activeNode = allNodes.find(n => n.id === activeNodeId);
     if (!activeNode || isLoading) return;
-    
+
     setError("");
     setIsLoading(true);
-    
+
     // Remove old non-chain children of active node
     const childIds = allNodes.filter(n => n.parentId === activeNodeId && !n.isInChain).map(n => n.id);
-    
+
     setAllNodes(prev => prev.filter(n => !childIds.includes(n.id)));
     setConnections(prev => prev.filter(c => !childIds.includes(c.toId)));
-    
+
     const parentAngle = getParentAngle(activeNodeId);
     const obstacles = getPlacementObstacles(activeNodeId);
-    
+
     try {
-      const subtopics = await generateSubtopics(activeNode.topic, thinkingChain);
-      const basePositions = calculateRadialPositions(activeNode.position, subtopics.length, parentAngle);
+      const ideaNodes = await generateIdeaNodes(activeNode.content, {
+        objective: seedData?.objective,
+        guiding_questions: seedData?.guiding_questions,
+        parentChain: thinkingChain
+      });
+
+      const basePositions = calculateRadialPositions(activeNode.position, ideaNodes.length, parentAngle);
       const positions = resolvePositions(basePositions, obstacles);
-      
-      const newNodes = subtopics.map((topic, i) => ({
-        id: `node-${Date.now()}-${i}`,
-        topic,
+
+      const timestamp = Date.now();
+      const newNodes = ideaNodes.map((idea, i) => ({
+        id: `${idea.id}_${timestamp}_${i}`,
+        topic: idea.content,
+        content: idea.content,
+        type: idea.type,
         position: positions[i],
         isRoot: false,
         isInChain: false,
-        parentId: activeNodeId
+        parentId: activeNodeId,
+        expandable: idea.expandable
       }));
-      
+
       const newConnections = newNodes.map(node => ({
         id: `conn-${node.id}`,
         from: activeNode.position,
@@ -291,93 +358,84 @@ export default function BrainCanvas() {
         toId: node.id,
         isInChain: false
       }));
-      
+
       setAllNodes(prev => [...prev, ...newNodes]);
       setConnections(prev => [...prev, ...newConnections]);
     } catch (err) {
       setError("Failed to regenerate. Please try again.");
+      console.error(err);
     }
-    
+
     setIsLoading(false);
   };
 
-  // Add custom subtopic
-  const handleAddCustom = async () => {
-    if (!customInput.trim()) return;
-    
-    const activeNode = allNodes.find(n => n.id === activeNodeId);
-    if (!activeNode) return;
-    
-    const words = customInput.trim().split(/\s+/).slice(0, 5);
-    const limitedTopic = words.join(" ");
-    
-    // Find a position for the custom node
-    const existingChildren = allNodes.filter(n => n.parentId === activeNodeId);
-    const angle = Math.PI / 2 + (existingChildren.length * 0.5);
-    const basePosition = {
-      x: activeNode.position.x + Math.cos(angle) * 280,
-      y: activeNode.position.y + Math.sin(angle) * 280,
-      angle
-    };
-    const obstacles = getPlacementObstacles(activeNodeId);
-    const [position] = resolvePositions([basePosition], obstacles);
-    
-    const newNode = {
-      id: `custom-${Date.now()}`,
-      topic: limitedTopic,
-      position,
-      isRoot: false,
-      isInChain: false,
-      parentId: activeNodeId
-    };
-    
-    const newConnection = {
-      id: `conn-${newNode.id}`,
-      from: activeNode.position,
-      to: position,
-      fromId: activeNodeId,
-      toId: newNode.id,
-      isInChain: false
-    };
-    
-    setAllNodes(prev => [...prev, newNode]);
-    setConnections(prev => [...prev, newConnection]);
-    setCustomInput("");
-    setShowCustomInput(false);
-  };
-
-  // Generate final content
-  const handleGenerateFinal = async () => {
+  // --- Stage 3: Structure into Directions ---
+  const handleStructure = async () => {
     if (thinkingChain.length < 2) {
-      setError("Please explore at least one subtopic before generating.");
+      setError("Please explore at least one idea before structuring.");
       return;
     }
-    
+
     setError("");
     setIsLoading(true);
-    
+
     try {
-      const content = await generateFinalContent(thinkingChain);
-      setFinalContent(content);
+      // Get all nodes in the thinking chain
+      const chainNodes = allNodes.filter(n => n.isInChain && !n.isRoot);
+
+      const dirs = await clusterIntoDirections(
+        chainNodes.map(n => ({ id: n.id, type: n.type, content: n.content })),
+        seedData?.objective || thinkingChain[0]
+      );
+
+      setDirections(dirs);
+      setCurrentStage(STAGES.STRUCTURE);
+    } catch (err) {
+      setError("Failed to structure ideas. Please try again.");
+      console.error(err);
+    }
+
+    setIsLoading(false);
+  };
+
+  // --- Stage 4: Synthesize ---
+  const handleSynthesize = async () => {
+    setError("");
+    setIsLoading(true);
+
+    try {
+      const chainNodes = allNodes.filter(n => n.isInChain && !n.isRoot);
+
+      const synth = await generateSynthesis(
+        seedData?.objective || thinkingChain[0],
+        directions,
+        chainNodes.map(n => ({ id: n.id, type: n.type, content: n.content }))
+      );
+
+      setSynthesis(synth);
+      setCurrentStage(STAGES.SYNTHESIZE);
       setShowFinalOutput(true);
     } catch (err) {
-      setError("Failed to generate final content. Please try again.");
+      setError("Failed to synthesize. Please try again.");
+      console.error(err);
     }
-    
+
     setIsLoading(false);
   };
 
   // Reset everything
   const handleReset = () => {
-    setRootTopic("");
+    setCurrentStage(STAGES.INPUT);
     setInputValue("");
+    setSeedData(null);
     setAllNodes([]);
     setConnections([]);
     setActiveNodeId(null);
     setThinkingChain([]);
     setViewOffset({ x: 0, y: 0 });
+    setDirections([]);
+    setSynthesis(null);
     setShowFinalOutput(false);
-    setFinalContent("");
     setError("");
   };
 
@@ -402,6 +460,11 @@ export default function BrainCanvas() {
     return offsets;
   }, [connections]);
 
+  // Get clustered nodes for final output
+  const clusteredNodes = useMemo(() => {
+    return allNodes.filter(n => n.isInChain && !n.isRoot);
+  }, [allNodes]);
+
   return (
     <div className="brain-canvas-container">
       {/* Cosmic Background */}
@@ -412,7 +475,7 @@ export default function BrainCanvas() {
       </div>
 
       {/* Header */}
-      <motion.header 
+      <motion.header
         className="canvas-header"
         initial={{ y: -50, opacity: 0 }}
         animate={{ y: 0, opacity: 1 }}
@@ -421,22 +484,45 @@ export default function BrainCanvas() {
           <span className="logo-icon">⚡</span>
           ThinkStorm
         </h1>
-        
-        {thinkingChain.length > 0 && (
-          <div className="thinking-chain">
-            {thinkingChain.map((item, i) => (
-              <span key={i} className="chain-item">
-                {item}
-                {i < thinkingChain.length - 1 && <span className="chain-arrow">→</span>}
-              </span>
-            ))}
+
+        {currentStage > STAGES.INPUT && (
+          <div className="header-info">
+            {/* Stage Progress */}
+            <div className="stage-progress">
+              {STAGE_LABELS.slice(1).map((label, i) => (
+                <div
+                  key={label}
+                  className={`stage-dot ${i + 1 <= currentStage ? 'active' : ''} ${i + 1 === currentStage ? 'current' : ''}`}
+                >
+                  <span className="stage-num">{i + 1}</span>
+                  {i < 3 && <span className="stage-line" />}
+                </div>
+              ))}
+            </div>
+
+            {/* Thinking Chain */}
+            <div className="thinking-chain">
+              {thinkingChain.map((item, i) => (
+                <span key={i} className="chain-item">
+                  {item.length > 20 ? item.slice(0, 20) + "..." : item}
+                  {i < thinkingChain.length - 1 && <span className="chain-arrow">→</span>}
+                </span>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* Seed Info Badge */}
+        {seedData && currentStage >= STAGES.EXPAND && (
+          <div className="seed-badge" title={seedData.objective}>
+            🎯 {seedData.objective?.slice(0, 40)}...
           </div>
         )}
       </motion.header>
 
-      {/* Initial Input - Properly Centered */}
-      {!rootTopic && (
-        <motion.div 
+      {/* Initial Input */}
+      {currentStage === STAGES.INPUT && (
+        <motion.div
           className="initial-input-container"
           initial={{ scale: 0.9, opacity: 0 }}
           animate={{ scale: 1, opacity: 1 }}
@@ -450,7 +536,7 @@ export default function BrainCanvas() {
               value={inputValue}
               onChange={(e) => setInputValue(e.target.value)}
               onKeyDown={(e) => e.key === "Enter" && handleStart()}
-              placeholder="e.g., Business, Technology, Art..."
+              placeholder="e.g., AI research, Startup ideas, Product features..."
               className="main-input"
               autoFocus
             />
@@ -467,16 +553,16 @@ export default function BrainCanvas() {
         </motion.div>
       )}
 
-      {/* Canvas Area with Viewport Panning */}
-      {rootTopic && (
+      {/* Canvas Area with Spider-Web Nodes */}
+      {currentStage >= STAGES.EXPAND && currentStage < STAGES.SYNTHESIZE && (
         <div className="canvas-area" ref={canvasRef}>
-          <motion.div 
+          <motion.div
             className="canvas-viewport"
-            animate={{ 
+            animate={{
               x: viewOffset.x,
               y: viewOffset.y
             }}
-            transition={{ 
+            transition={{
               type: "spring",
               stiffness: 100,
               damping: 20
@@ -489,8 +575,8 @@ export default function BrainCanvas() {
                 {connections
                   .filter(conn => visibleNodeIds.has(conn.fromId) && visibleNodeIds.has(conn.toId))
                   .map((conn) => (
-                    <ConnectionLine 
-                      key={conn.id} 
+                    <ConnectionLine
+                      key={conn.id}
                       from={conn.from}
                       to={conn.to}
                       isInChain={conn.isInChain}
@@ -508,11 +594,13 @@ export default function BrainCanvas() {
                   <ThinkNode
                     key={node.id}
                     topic={node.topic}
+                    nodeType={node.type}
                     isRoot={node.isRoot}
                     isActive={node.id === activeNodeId}
                     isInChain={node.isInChain}
                     position={node.position}
                     onClick={() => handleNodeClick(node)}
+                    typeColor={TYPE_COLORS[node.type]}
                     delay={0}
                   />
                 ))}
@@ -521,7 +609,7 @@ export default function BrainCanvas() {
 
           {/* Loading Overlay */}
           {isLoading && (
-            <motion.div 
+            <motion.div
               className="loading-overlay"
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}
@@ -534,101 +622,94 @@ export default function BrainCanvas() {
         </div>
       )}
 
-      {/* Control Panel - Properly Centered */}
-      {rootTopic && !showFinalOutput && (
-        <motion.div 
+      {/* Control Panel */}
+      {currentStage >= STAGES.EXPAND && !showFinalOutput && (
+        <motion.div
           className="control-panel-wrap"
           initial={{ y: 50, opacity: 0 }}
           animate={{ y: 0, opacity: 1 }}
         >
           <div className="control-panel">
-            <button 
+            <button
               className="control-btn regenerate"
               onClick={handleRegenerate}
               disabled={isLoading}
             >
               🔄 Regenerate
             </button>
-            
-            <button 
-              className="control-btn custom"
-              onClick={() => setShowCustomInput(!showCustomInput)}
-            >
-              ✏️ Custom Input
-            </button>
-            
-            <button 
-              className="control-btn generate"
-              onClick={handleGenerateFinal}
-              disabled={isLoading || thinkingChain.length < 2}
-            >
-              ✨ Generate Proposal
-            </button>
-            
-            <button 
+
+            {currentStage === STAGES.EXPAND && (
+              <button
+                className="control-btn structure"
+                onClick={handleStructure}
+                disabled={isLoading || thinkingChain.length < 2}
+              >
+                📊 Structure Ideas
+              </button>
+            )}
+
+            {currentStage === STAGES.STRUCTURE && (
+              <button
+                className="control-btn generate"
+                onClick={handleSynthesize}
+                disabled={isLoading}
+              >
+                ✨ Synthesize Report
+              </button>
+            )}
+
+            <button
               className="control-btn reset"
               onClick={handleReset}
             >
               🗑️ Reset
             </button>
           </div>
-        </motion.div>
-      )}
 
-      {/* Custom Input Modal */}
-      <AnimatePresence>
-        {showCustomInput && (
-          <motion.div 
-            className="custom-input-modal"
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            exit={{ opacity: 0 }}
-          >
-            <motion.div 
-              className="modal-content"
-              initial={{ scale: 0.85, y: 20 }}
-              animate={{ scale: 1, y: 0 }}
-              exit={{ scale: 0.85, y: 20 }}
+          {/* Directions Overview for Structure Stage */}
+          {currentStage === STAGES.STRUCTURE && directions.length > 0 && (
+            <motion.div
+              className="directions-panel"
+              initial={{ opacity: 0, y: 20 }}
+              animate={{ opacity: 1, y: 0 }}
             >
-              <h3>Add Your Own Subtopic</h3>
-              <p className="modal-hint">Maximum 5 words</p>
-              <input
-                type="text"
-                value={customInput}
-                onChange={(e) => setCustomInput(e.target.value)}
-                onKeyDown={(e) => e.key === "Enter" && handleAddCustom()}
-                placeholder="Enter your idea..."
-                autoFocus
-              />
-              <div className="modal-actions">
-                <button onClick={handleAddCustom} className="add-btn">Add</button>
-                <button onClick={() => setShowCustomInput(false)} className="cancel-btn">Cancel</button>
+              <h3>📂 Directions Found</h3>
+              <div className="directions-list">
+                {directions.map(dir => (
+                  <div key={dir.direction_id} className="direction-chip">
+                    <span className="dir-id">{dir.direction_id}</span>
+                    <span className="dir-name">{dir.title}</span>
+                  </div>
+                ))}
               </div>
             </motion.div>
-          </motion.div>
-        )}
-      </AnimatePresence>
+          )}
+        </motion.div>
+      )}
 
       {/* Error Display */}
       <AnimatePresence>
         {error && (
-          <motion.div 
+          <motion.div
             className="error-toast"
             initial={{ opacity: 0, y: 50 }}
             animate={{ opacity: 1, y: 0 }}
             exit={{ opacity: 0, y: 50 }}
           >
             {error}
+            <button className="error-close" onClick={() => setError("")}>×</button>
           </motion.div>
         )}
       </AnimatePresence>
 
       {/* Final Output */}
       <AnimatePresence>
-        {showFinalOutput && (
-          <FinalOutput 
-            content={finalContent}
-            thinkingChain={thinkingChain}
+        {showFinalOutput && synthesis && (
+          <FinalOutput
+            synthesis={synthesis}
+            seedData={seedData}
+            directions={directions}
+            ideaNodes={clusteredNodes}
             onClose={() => setShowFinalOutput(false)}
             onReset={handleReset}
           />
