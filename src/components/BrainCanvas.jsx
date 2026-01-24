@@ -64,34 +64,47 @@ export default function BrainCanvas() {
     return { x: width / 2, y: height / 2 };
   }, []);
 
-  // Pan camera to center on a node
-  const panToNode = useCallback((nodePos) => {
+  // Pan camera to position node in upper portion of screen
+  // This allows subnodes expanding below to be visible
+  const panToNode = useCallback((nodePos, isExpanding = false) => {
     const viewport = getViewportCenter();
+    // Always position node in upper portion so subnodes below are visible
+    const yOffset = isExpanding ? viewport.y * 0.25 : viewport.y * 0.35;
     setViewOffset({
       x: viewport.x - nodePos.x,
-      y: viewport.y - nodePos.y
+      y: yOffset - nodePos.y
     });
   }, [getViewportCenter]);
 
-  // Calculate radial positions around a parent node
+  // Calculate positions for subnodes in a fan pattern BELOW the parent
   const calculateRadialPositions = useCallback((parentPos, count, startAngle = 0) => {
     const positions = [];
-    const radius = 260 + count * 24;
-    const angleSpread = Math.min(Math.PI * 1.2, Math.max(Math.PI * 0.7, count * 0.35));
-    const baseAngle = startAngle + Math.PI / 2;
+    // Vertical distance below parent
+    const verticalOffset = 220;
+    // Calculate horizontal spread based on count
+    const nodeWidth = 200; // Approximate node width
+    const horizontalSpacing = nodeWidth + 40; // Space between nodes
+    const totalWidth = (count - 1) * horizontalSpacing;
+    const startX = parentPos.x - totalWidth / 2;
 
     for (let i = 0; i < count; i++) {
-      const angle = baseAngle - angleSpread / 2 + (i * angleSpread) / (count - 1 || 1);
+      // Spread nodes horizontally below parent
+      const x = startX + i * horizontalSpacing;
+      // Stagger Y position slightly for visual interest (wave pattern)
+      const yStagger = Math.abs(i - (count - 1) / 2) * 20;
+      const y = parentPos.y + verticalOffset + yStagger;
+
       positions.push({
-        x: parentPos.x + Math.cos(angle) * radius,
-        y: parentPos.y + Math.sin(angle) * radius,
-        angle
+        x: x,
+        y: y,
+        angle: Math.PI / 2 // pointing down
       });
     }
     return positions;
   }, []);
 
-  const MIN_NODE_DISTANCE = 190;
+  // Minimum distance between nodes to prevent overlap
+  const MIN_NODE_DISTANCE = 220;
 
   const getPlacementObstacles = useCallback((activeId) => {
     if (!activeId) return [];
@@ -263,7 +276,8 @@ export default function BrainCanvas() {
     ));
 
     setActiveNodeId(clickedNode.id);
-    panToNode(clickedNode.position);
+    // Position node in upper portion of screen so subnodes below are visible
+    panToNode(clickedNode.position, true);
 
     const parentAngle = getParentAngle(clickedNode.id);
     const obstacles = getPlacementObstacles(clickedNode.id);

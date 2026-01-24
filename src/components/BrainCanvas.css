@@ -71,7 +71,7 @@
   top: 0;
   left: 0;
   right: 0;
-  padding: 12px 30px;
+  padding: 12px 20px;
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -80,7 +80,8 @@
   backdrop-filter: blur(12px);
   height: 70px;
   border-bottom: 1px solid rgba(139, 92, 246, 0.2);
-  gap: 20px;
+  gap: 12px;
+  overflow: hidden;
 }
 
 .logo {
@@ -102,9 +103,11 @@
 .header-info {
   display: flex;
   align-items: center;
-  gap: 24px;
+  gap: 16px;
   flex: 1;
   justify-content: center;
+  overflow: hidden;
+  min-width: 0;
 }
 
 /* Stage Progress Dots */
@@ -162,24 +165,35 @@
 .thinking-chain {
   display: flex;
   align-items: center;
-  gap: 6px;
-  flex-wrap: wrap;
-  max-width: 400px;
+  gap: 4px;
+  overflow-x: auto;
+  overflow-y: hidden;
+  max-width: 500px;
+  padding: 4px 0;
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+
+.thinking-chain::-webkit-scrollbar {
+  display: none;
 }
 
 .chain-item {
-  font-size: 0.8rem;
+  font-size: 0.7rem;
   color: #94a3b8;
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 4px;
   background: rgba(139, 92, 246, 0.15);
-  padding: 4px 10px;
-  border-radius: 12px;
+  padding: 3px 8px;
+  border-radius: 10px;
+  white-space: nowrap;
+  flex-shrink: 0;
 }
 
 .chain-arrow {
   color: #8b5cf6;
+  flex-shrink: 0;
 }
 
 /* Seed Badge */
