@@ -1,4 +1,4 @@
-import { motion } from "motion/react";
+import { motion as Motion } from "motion/react";
 import "./ThinkNode.css";
 
 // Type labels for display
@@ -29,7 +29,7 @@ export default function ThinkNode({
       className="think-node-wrapper"
       style={position ? { left: position.x, top: position.y } : {}}
     >
-      <motion.div
+      <Motion.div
         className={`think-node ${isRoot ? "root" : ""} ${isActive ? "active" : ""} ${isInChain ? "in-chain" : ""}`}
         initial={{ scale: 0, opacity: 0 }}
         animate={{ scale: 1, opacity: 1 }}
@@ -64,7 +64,7 @@ export default function ThinkNode({
 
         <span className="node-text">{topic}</span>
         {isActive && <div className="pulse-ring" />}
-      </motion.div>
+      </Motion.div>
     </div>
   );
 }

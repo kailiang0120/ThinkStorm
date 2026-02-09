@@ -1,4 +1,4 @@
-import { motion } from "motion/react";
+import { motion as Motion } from "motion/react";
 import "./FinalOutput.css";
 
 export default function FinalOutput({
@@ -155,13 +155,13 @@ export default function FinalOutput({
   };
 
   return (
-    <motion.div
+    <Motion.div
       className="final-output-overlay"
       initial={{ opacity: 0 }}
       animate={{ opacity: 1 }}
       exit={{ opacity: 0 }}
     >
-      <motion.div
+      <Motion.div
         className="final-output-container"
         initial={{ scale: 0.9, y: 50 }}
         animate={{ scale: 1, y: 0 }}
@@ -352,7 +352,7 @@ export default function FinalOutput({
             🔄 Start New Brainstorm
           </button>
         </footer>
-      </motion.div>
-    </motion.div>
+      </Motion.div>
+    </Motion.div>
   );
 }

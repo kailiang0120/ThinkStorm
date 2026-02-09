@@ -1,5 +1,5 @@
 import { useState, useCallback, useRef, useMemo } from "react";
-import { motion, AnimatePresence } from "motion/react";
+import { motion as Motion, AnimatePresence } from "motion/react";
 import ThinkNode from "./ThinkNode";
 import ConnectionLine, { ConnectionGradients } from "./ConnectionLine";
 import FinalOutput from "./FinalOutput";
@@ -51,11 +51,17 @@ export default function BrainCanvas() {
   const [thinkingChain, setThinkingChain] = useState([]);
   const [viewOffset, setViewOffset] = useState({ x: 0, y: 0 });
   const canvasRef = useRef(null);
+  const nodeIdCounter = useRef(0);
 
   // Structure & Synthesis
   const [directions, setDirections] = useState([]);
   const [synthesis, setSynthesis] = useState(null);
   const [showFinalOutput, setShowFinalOutput] = useState(false);
+
+  const createNodeId = useCallback((baseId = "idea") => {
+    nodeIdCounter.current += 1;
+    return `${baseId}_${nodeIdCounter.current}`;
+  }, []);
 
   // Get viewport center
   const getViewportCenter = useCallback(() => {
@@ -77,7 +83,7 @@ export default function BrainCanvas() {
   }, [getViewportCenter]);
 
   // Calculate positions for subnodes in a fan pattern BELOW the parent
-  const calculateRadialPositions = useCallback((parentPos, count, startAngle = 0) => {
+  const calculateRadialPositions = useCallback((parentPos, count) => {
     const positions = [];
     // Vertical distance below parent
     const verticalOffset = 220;
@@ -149,15 +155,18 @@ export default function BrainCanvas() {
     return resolved;
   }, []);
 
-  // Get direction angle from parent's parent to parent
-  const getParentAngle = useCallback((nodeId) => {
-    const node = allNodes.find(n => n.id === nodeId);
-    if (!node || !node.parentId) return 0;
+  const buildPathToNode = useCallback((nodeId) => {
+    const path = [];
+    let currentId = nodeId;
 
-    const parent = allNodes.find(n => n.id === node.parentId);
-    if (!parent) return 0;
+    while (currentId) {
+      const current = allNodes.find(n => n.id === currentId);
+      if (!current) break;
+      path.push(current);
+      currentId = current.parentId;
+    }
 
-    return Math.atan2(node.position.y - parent.position.y, node.position.x - parent.position.x);
+    return path.reverse();
   }, [allNodes]);
 
   const chainNodeIds = useMemo(() => {
@@ -219,7 +228,7 @@ export default function BrainCanvas() {
         guiding_questions: seed.guiding_questions
       });
 
-      const basePositions = calculateRadialPositions(CANVAS_CENTER, ideaNodes.length, 0);
+      const basePositions = calculateRadialPositions(CANVAS_CENTER, ideaNodes.length);
       const positions = resolvePositions(basePositions, [rootNode]);
 
       const newNodes = ideaNodes.map((idea, i) => ({
@@ -256,13 +265,23 @@ export default function BrainCanvas() {
 
   // --- Stage 2: Handle clicking on a node to expand ---
   const handleNodeClick = async (clickedNode) => {
-    if (isLoading || clickedNode.isInChain) return;
+    if (isLoading) return;
+
+    const pathNodes = buildPathToNode(clickedNode.id);
+    const newChain = pathNodes.length > 0
+      ? pathNodes.map(node => node.content)
+      : [clickedNode.content];
+
+    if (clickedNode.isInChain) {
+      setThinkingChain(newChain);
+      setActiveNodeId(clickedNode.id);
+      panToNode(clickedNode.position);
+      return;
+    }
 
     setError("");
     setIsLoading(true);
 
-    // Add to thinking chain
-    const newChain = [...thinkingChain, clickedNode.content];
     setThinkingChain(newChain);
 
     // Mark this node as in-chain
@@ -279,7 +298,6 @@ export default function BrainCanvas() {
     // Position node in upper portion of screen so subnodes below are visible
     panToNode(clickedNode.position, true);
 
-    const parentAngle = getParentAngle(clickedNode.id);
     const obstacles = getPlacementObstacles(clickedNode.id);
 
     try {
@@ -289,12 +307,11 @@ export default function BrainCanvas() {
         parentChain: newChain
       });
 
-      const basePositions = calculateRadialPositions(clickedNode.position, ideaNodes.length, parentAngle);
+      const basePositions = calculateRadialPositions(clickedNode.position, ideaNodes.length);
       const positions = resolvePositions(basePositions, obstacles);
 
-      const timestamp = Date.now();
       const newNodes = ideaNodes.map((idea, i) => ({
-        id: `${idea.id}_${timestamp}_${i}`,
+        id: createNodeId(idea.id),
         topic: idea.content,
         content: idea.content,
         type: idea.type,
@@ -338,7 +355,6 @@ export default function BrainCanvas() {
     setAllNodes(prev => prev.filter(n => !childIds.includes(n.id)));
     setConnections(prev => prev.filter(c => !childIds.includes(c.toId)));
 
-    const parentAngle = getParentAngle(activeNodeId);
     const obstacles = getPlacementObstacles(activeNodeId);
 
     try {
@@ -348,12 +364,11 @@ export default function BrainCanvas() {
         parentChain: thinkingChain
       });
 
-      const basePositions = calculateRadialPositions(activeNode.position, ideaNodes.length, parentAngle);
+      const basePositions = calculateRadialPositions(activeNode.position, ideaNodes.length);
       const positions = resolvePositions(basePositions, obstacles);
 
-      const timestamp = Date.now();
       const newNodes = ideaNodes.map((idea, i) => ({
-        id: `${idea.id}_${timestamp}_${i}`,
+        id: createNodeId(idea.id),
         topic: idea.content,
         content: idea.content,
         type: idea.type,
@@ -385,7 +400,8 @@ export default function BrainCanvas() {
 
   // --- Stage 3: Structure into Directions ---
   const handleStructure = async () => {
-    if (thinkingChain.length < 2) {
+    const exploredNodes = allNodes.filter(n => n.isInChain && !n.isRoot);
+    if (exploredNodes.length < 2) {
       setError("Please explore at least one idea before structuring.");
       return;
     }
@@ -394,12 +410,9 @@ export default function BrainCanvas() {
     setIsLoading(true);
 
     try {
-      // Get all nodes in the thinking chain
-      const chainNodes = allNodes.filter(n => n.isInChain && !n.isRoot);
-
       const dirs = await clusterIntoDirections(
-        chainNodes.map(n => ({ id: n.id, type: n.type, content: n.content })),
-        seedData?.objective || thinkingChain[0]
+        exploredNodes.map(n => ({ id: n.id, type: n.type, content: n.content })),
+        seedData?.objective || thinkingChain[0] || inputValue
       );
 
       setDirections(dirs);
@@ -451,6 +464,7 @@ export default function BrainCanvas() {
     setSynthesis(null);
     setShowFinalOutput(false);
     setError("");
+    nodeIdCounter.current = 0;
   };
 
   const connectionOffsets = useMemo(() => {
@@ -489,7 +503,7 @@ export default function BrainCanvas() {
       </div>
 
       {/* Header */}
-      <motion.header
+      <Motion.header
         className="canvas-header"
         initial={{ y: -50, opacity: 0 }}
         animate={{ y: 0, opacity: 1 }}
@@ -532,11 +546,11 @@ export default function BrainCanvas() {
             🎯 {seedData.objective?.slice(0, 40)}...
           </div>
         )}
-      </motion.header>
+      </Motion.header>
 
       {/* Initial Input */}
       {currentStage === STAGES.INPUT && (
-        <motion.div
+        <Motion.div
           className="initial-input-container"
           initial={{ scale: 0.9, opacity: 0 }}
           animate={{ scale: 1, opacity: 1 }}
@@ -554,7 +568,7 @@ export default function BrainCanvas() {
               className="main-input"
               autoFocus
             />
-            <motion.button
+            <Motion.button
               className="start-btn"
               onClick={handleStart}
               disabled={!inputValue.trim() || isLoading}
@@ -562,15 +576,15 @@ export default function BrainCanvas() {
               whileTap={{ scale: 0.97 }}
             >
               {isLoading ? "Generating..." : "Start Brainstorming"}
-            </motion.button>
+            </Motion.button>
           </div>
-        </motion.div>
+        </Motion.div>
       )}
 
       {/* Canvas Area with Spider-Web Nodes */}
       {currentStage >= STAGES.EXPAND && currentStage < STAGES.SYNTHESIZE && (
         <div className="canvas-area" ref={canvasRef}>
-          <motion.div
+          <Motion.div
             className="canvas-viewport"
             animate={{
               x: viewOffset.x,
@@ -619,11 +633,11 @@ export default function BrainCanvas() {
                   />
                 ))}
             </AnimatePresence>
-          </motion.div>
+          </Motion.div>
 
           {/* Loading Overlay */}
           {isLoading && (
-            <motion.div
+            <Motion.div
               className="loading-overlay"
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}
@@ -631,14 +645,14 @@ export default function BrainCanvas() {
             >
               <div className="loading-spinner" />
               <span>AI is thinking...</span>
-            </motion.div>
+            </Motion.div>
           )}
         </div>
       )}
 
       {/* Control Panel */}
       {currentStage >= STAGES.EXPAND && !showFinalOutput && (
-        <motion.div
+        <Motion.div
           className="control-panel-wrap"
           initial={{ y: 50, opacity: 0 }}
           animate={{ y: 0, opacity: 1 }}
@@ -656,7 +670,7 @@ export default function BrainCanvas() {
               <button
                 className="control-btn structure"
                 onClick={handleStructure}
-                disabled={isLoading || thinkingChain.length < 2}
+                disabled={isLoading || clusteredNodes.length < 2}
               >
                 📊 Structure Ideas
               </button>
@@ -682,7 +696,7 @@ export default function BrainCanvas() {
 
           {/* Directions Overview for Structure Stage */}
           {currentStage === STAGES.STRUCTURE && directions.length > 0 && (
-            <motion.div
+            <Motion.div
               className="directions-panel"
               initial={{ opacity: 0, y: 20 }}
               animate={{ opacity: 1, y: 0 }}
@@ -696,15 +710,15 @@ export default function BrainCanvas() {
                   </div>
                 ))}
               </div>
-            </motion.div>
+            </Motion.div>
           )}
-        </motion.div>
+        </Motion.div>
       )}
 
       {/* Error Display */}
       <AnimatePresence>
         {error && (
-          <motion.div
+          <Motion.div
             className="error-toast"
             initial={{ opacity: 0, y: 50 }}
             animate={{ opacity: 1, y: 0 }}
@@ -712,7 +726,7 @@ export default function BrainCanvas() {
           >
             {error}
             <button className="error-close" onClick={() => setError("")}>×</button>
-          </motion.div>
+          </Motion.div>
         )}
       </AnimatePresence>
 

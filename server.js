@@ -1,276 +1,586 @@
+/* global process */
+
 import express from 'express';
 import cors from 'cors';
 import { GoogleGenerativeAI } from '@google/generative-ai';
 import dotenv from 'dotenv';
 
-// Load environment variables
 dotenv.config();
 
 const app = express();
 const PORT = process.env.PORT || 3001;
 
-// Middleware
 app.use(cors());
-app.use(express.json());
+app.use(express.json({ limit: '1mb' }));
 
-// Initialize Gemini
 const API_KEY = process.env.GEMINI_API_KEY;
+const FLASH_MODEL_NAME = process.env.GEMINI_FLASH_MODEL || 'gemini-3-flash-preview';
+const PRO_MODEL_NAME = process.env.GEMINI_PRO_MODEL || 'gemini-3-pro-preview';
+let flashModel = null;
+let proModel = null;
+
 if (!API_KEY) {
-    console.error('❌ Missing GEMINI_API_KEY in environment variables');
-    process.exit(1);
+  console.error('Missing GEMINI_API_KEY in environment variables');
+} else {
+  const genAI = new GoogleGenerativeAI(API_KEY);
+  flashModel = genAI.getGenerativeModel({ model: FLASH_MODEL_NAME });
+  proModel = genAI.getGenerativeModel({ model: PRO_MODEL_NAME });
 }
 
-const genAI = new GoogleGenerativeAI(API_KEY);
-const flashModel = genAI.getGenerativeModel({ model: 'gemini-3-flash-preview' });
-const proModel = genAI.getGenerativeModel({ model: 'gemini-3-pro-preview' });
+const IDEA_TYPES = ['problem', 'method', 'application', 'assumption', 'opportunity'];
+const IDEA_TYPES_SET = new Set(IDEA_TYPES);
+const POTENTIAL_LEVELS_SET = new Set(['high', 'medium', 'low']);
+const SYNTHESIS_MODES_SET = new Set(['research', 'startup', 'product', 'exploration']);
 
-// ============ API Routes ============
+function normalizeSentence(value, maxLength = 180) {
+  if (typeof value !== 'string') return '';
+  return value.replace(/\s+/g, ' ').trim().slice(0, maxLength);
+}
 
-/**
- * POST /api/interpret-seed
- * Stage 1: Seed Interpretation
- */
-app.post('/api/interpret-seed', async (req, res) => {
+function normalizeStringArray(value, maxItems = 5, maxLength = 160) {
+  if (!Array.isArray(value)) return [];
+  const normalized = value
+    .map((item) => normalizeSentence(item, maxLength))
+    .filter(Boolean);
+  return normalized.slice(0, maxItems);
+}
+
+function extractBalancedJson(text, openChar, closeChar) {
+  const start = text.indexOf(openChar);
+  if (start === -1) return null;
+
+  let depth = 0;
+  let inString = false;
+  let escaped = false;
+
+  for (let i = start; i < text.length; i += 1) {
+    const ch = text[i];
+
+    if (inString) {
+      if (escaped) {
+        escaped = false;
+      } else if (ch === '\\') {
+        escaped = true;
+      } else if (ch === '"') {
+        inString = false;
+      }
+      continue;
+    }
+
+    if (ch === '"') {
+      inString = true;
+      continue;
+    }
+
+    if (ch === openChar) {
+      depth += 1;
+    } else if (ch === closeChar) {
+      depth -= 1;
+      if (depth === 0) {
+        return text.slice(start, i + 1);
+      }
+    }
+  }
+
+  return null;
+}
+
+function parseModelJson(text, expectedType = 'object') {
+  if (typeof text !== 'string') return null;
+  const cleaned = text
+    .replace(/```json/gi, '')
+    .replace(/```/g, '')
+    .trim();
+
+  const candidates = [cleaned];
+  const objectCandidate = extractBalancedJson(cleaned, '{', '}');
+  const arrayCandidate = extractBalancedJson(cleaned, '[', ']');
+
+  if (expectedType === 'array') {
+    if (arrayCandidate) candidates.push(arrayCandidate);
+    if (objectCandidate) candidates.push(objectCandidate);
+  } else {
+    if (objectCandidate) candidates.push(objectCandidate);
+    if (arrayCandidate) candidates.push(arrayCandidate);
+  }
+
+  for (const candidate of candidates) {
     try {
-        const { userInput } = req.body;
+      const parsed = JSON.parse(candidate);
+      if (expectedType === 'array' && Array.isArray(parsed)) return parsed;
+      if (expectedType === 'object' && parsed && !Array.isArray(parsed)) return parsed;
+    } catch {
+      // Keep trying the next candidate
+    }
+  }
 
-        const prompt = `You are an expert problem-framing assistant.
+  return null;
+}
 
-Given the user's input topic: "${userInput}"
+async function runStructuredPrompt(model, prompt, expectedType = 'object', temperature = 0.4) {
+  if (!model) {
+    throw new Error('Gemini model is not initialized. Check GEMINI_API_KEY.');
+  }
 
-Rewrite it into:
-1. A clear thinking objective - what the user is trying to figure out
-2. 1–2 guiding questions that define what the user is trying to figure out
+  let text = '';
 
-Rules:
-- Do not expand ideas yet.
-- Do not provide solutions.
-- Focus on clarifying intent.
+  try {
+    const result = await model.generateContent({
+      contents: [{ role: 'user', parts: [{ text: prompt }] }],
+      generationConfig: {
+        responseMimeType: 'application/json',
+        temperature
+      }
+    });
+    text = result.response.text();
+  } catch (structuredError) {
+    console.warn('Structured response failed; retrying plain generation:', structuredError.message);
+    const fallbackResult = await model.generateContent(prompt);
+    text = fallbackResult.response.text();
+  }
 
-Return ONLY valid JSON in this exact format:
+  const parsed = parseModelJson(text, expectedType);
+  if (!parsed) {
+    throw new Error(`Failed to parse ${expectedType} JSON from model response`);
+  }
+  return parsed;
+}
+
+function addApiRoute(method, path, handler) {
+  app[method]([`/api${path}`, path], handler);
+}
+
+function normalizeIdeaNodes(rawNodes, topic) {
+  const shortTopic = normalizeSentence(topic, 40) || 'this topic';
+  const fallback = [
+    { type: 'problem', content: `What blocks progress on ${shortTopic}?`, expandable: true },
+    { type: 'method', content: `How can we test assumptions about ${shortTopic} quickly?`, expandable: true },
+    { type: 'application', content: `Which concrete use case of ${shortTopic} should be validated first?`, expandable: true },
+    { type: 'assumption', content: `Which hidden constraint about ${shortTopic} could make this fail?`, expandable: true },
+    { type: 'opportunity', content: `Where could ${shortTopic} create disproportionate value?`, expandable: true },
+    { type: 'method', content: `What experiment would de-risk ${shortTopic} in one week?`, expandable: true }
+  ];
+
+  const unique = [];
+  const seenContent = new Set();
+  const source = Array.isArray(rawNodes) ? rawNodes : [];
+
+  source.forEach((node) => {
+    const content = normalizeSentence(node?.content, 100);
+    if (!content) return;
+    const dedupeKey = content.toLowerCase();
+    if (seenContent.has(dedupeKey)) return;
+    seenContent.add(dedupeKey);
+    unique.push({
+      id: `idea_${unique.length + 1}`,
+      type: IDEA_TYPES_SET.has(node?.type) ? node.type : 'opportunity',
+      content,
+      expandable: node?.expandable !== false
+    });
+  });
+
+  fallback.forEach((node) => {
+    if (unique.length >= 7) return;
+    const dedupeKey = node.content.toLowerCase();
+    if (seenContent.has(dedupeKey)) return;
+    seenContent.add(dedupeKey);
+    unique.push({
+      id: `idea_${unique.length + 1}`,
+      ...node
+    });
+  });
+
+  return unique.slice(0, 8);
+}
+
+function normalizeInputIdeas(rawIdeaNodes) {
+  const source = Array.isArray(rawIdeaNodes) ? rawIdeaNodes : [];
+  const seenIds = new Set();
+  const normalized = [];
+
+  source.forEach((node) => {
+    const id = normalizeSentence(node?.id, 80);
+    const content = normalizeSentence(node?.content, 100);
+    if (!id || !content || seenIds.has(id)) return;
+    seenIds.add(id);
+    normalized.push({
+      id,
+      type: IDEA_TYPES_SET.has(node?.type) ? node.type : 'opportunity',
+      content
+    });
+  });
+
+  return normalized;
+}
+
+function normalizeDirections(rawDirections, ideaNodes) {
+  const validIdeaIds = ideaNodes.map((node) => node.id);
+  const validIdeaIdSet = new Set(validIdeaIds);
+  const usedIdeaIds = new Set();
+  const directions = [];
+
+  const source = Array.isArray(rawDirections) ? rawDirections : [];
+  source.forEach((direction) => {
+    const title = normalizeSentence(direction?.title, 48);
+    const summary = normalizeSentence(direction?.summary, 220);
+    const rawIds = normalizeStringArray(direction?.idea_ids, validIdeaIds.length, 80);
+
+    const dedupedIds = [];
+    rawIds.forEach((id) => {
+      if (!validIdeaIdSet.has(id) || usedIdeaIds.has(id)) return;
+      usedIdeaIds.add(id);
+      dedupedIds.push(id);
+    });
+
+    if (!title || !summary || dedupedIds.length === 0) return;
+
+    directions.push({
+      direction_id: `D${directions.length + 1}`,
+      title,
+      summary,
+      idea_ids: dedupedIds
+    });
+  });
+
+  const unassigned = validIdeaIds.filter((id) => !usedIdeaIds.has(id));
+  if (unassigned.length > 0) {
+    directions.push({
+      direction_id: `D${directions.length + 1}`,
+      title: 'Unsorted Insights',
+      summary: 'Ideas that did not fit the dominant direction patterns.',
+      idea_ids: unassigned
+    });
+  }
+
+  if (!directions.length && validIdeaIds.length > 0) {
+    directions.push({
+      direction_id: 'D1',
+      title: 'Main Direction',
+      summary: 'Initial grouping of explored ideas.',
+      idea_ids: validIdeaIds
+    });
+  }
+
+  if (directions.length > 5) {
+    const overflow = directions.slice(5).flatMap((direction) => direction.idea_ids);
+    directions[4].idea_ids = Array.from(new Set([...directions[4].idea_ids, ...overflow]));
+    directions.length = 5;
+  }
+
+  return directions.map((direction, index) => ({
+    ...direction,
+    direction_id: `D${index + 1}`
+  }));
+}
+
+function normalizeSynthesis(rawSynthesis, directions, objective) {
+  const directionIds = directions.map((direction) => direction.direction_id);
+  const directionIdSet = new Set(directionIds);
+
+  const analysisMap = new Map();
+  const rawAnalysis = Array.isArray(rawSynthesis?.directions_analysis)
+    ? rawSynthesis.directions_analysis
+    : [];
+
+  rawAnalysis.forEach((item) => {
+    const directionId = normalizeSentence(item?.direction_id, 12);
+    if (!directionIdSet.has(directionId) || analysisMap.has(directionId)) return;
+    analysisMap.set(directionId, {
+      direction_id: directionId,
+      value: normalizeSentence(item?.value, 260) || 'Needs deeper evaluation.',
+      risks: normalizeStringArray(item?.risks, 4, 120),
+      unknowns: normalizeStringArray(item?.unknowns, 4, 120),
+      potential: POTENTIAL_LEVELS_SET.has(item?.potential) ? item.potential : 'medium'
+    });
+  });
+
+  directionIds.forEach((directionId) => {
+    if (analysisMap.has(directionId)) return;
+    analysisMap.set(directionId, {
+      direction_id: directionId,
+      value: 'No detailed analysis was returned for this direction.',
+      risks: ['Evidence is currently limited.'],
+      unknowns: ['Needs additional validation data.'],
+      potential: 'medium'
+    });
+  });
+
+  const directionsAnalysis = directionIds.map((directionId) => analysisMap.get(directionId));
+
+  const filterDirectionList = (value) => {
+    if (!Array.isArray(value)) return [];
+    return value.filter((id) => directionIdSet.has(id)).slice(0, 3);
+  };
+
+  const fallbackMostPromising = directionsAnalysis.find((item) => item.potential === 'high')?.direction_id
+    || directionIds[0]
+    || 'D1';
+  const mostPromising = directionIdSet.has(rawSynthesis?.comparison?.most_promising)
+    ? rawSynthesis.comparison.most_promising
+    : fallbackMostPromising;
+
+  const mode = SYNTHESIS_MODES_SET.has(rawSynthesis?.detected_mode)
+    ? rawSynthesis.detected_mode
+    : 'exploration';
+
+  return {
+    problem_statement: {
+      interpreted_goal: normalizeSentence(rawSynthesis?.problem_statement?.interpreted_goal, 260)
+        || normalizeSentence(objective, 260)
+        || 'Clarify objective and evaluate alternatives.',
+      key_assumptions: normalizeStringArray(rawSynthesis?.problem_statement?.key_assumptions, 4, 140)
+    },
+    directions_analysis: directionsAnalysis,
+    comparison: {
+      most_promising: mostPromising,
+      can_be_combined: filterDirectionList(rawSynthesis?.comparison?.can_be_combined),
+      should_deprioritize: filterDirectionList(rawSynthesis?.comparison?.should_deprioritize)
+        .filter((directionId) => directionId !== mostPromising)
+    },
+    next_actions: {
+      immediate_steps: normalizeStringArray(rawSynthesis?.next_actions?.immediate_steps, 4, 180),
+      questions_to_answer: normalizeStringArray(rawSynthesis?.next_actions?.questions_to_answer, 4, 180),
+      validation_methods: normalizeStringArray(rawSynthesis?.next_actions?.validation_methods, 4, 180)
+    },
+    detected_mode: mode
+  };
+}
+
+addApiRoute('get', '/health', (_req, res) => {
+  res.json({ ok: true, flash_model: FLASH_MODEL_NAME, pro_model: PRO_MODEL_NAME });
+});
+
+addApiRoute('post', '/interpret-seed', async (req, res) => {
+  try {
+    const userInput = normalizeSentence(req.body?.userInput, 220);
+    if (!userInput) {
+      return res.status(400).json({ error: 'userInput is required' });
+    }
+
+    const prompt = `Role: You are a precision problem-framing assistant.
+
+User topic:
+${JSON.stringify(userInput)}
+
+Task:
+1. Rewrite the topic into one concrete thinking objective.
+2. Provide exactly 2 guiding questions that clarify what decision or understanding is needed.
+
+Constraints:
+- Do not generate solutions or action plans.
+- Keep objective under 20 words.
+- Keep each guiding question under 18 words.
+- Questions must be decision-oriented, not generic.
+
+Return JSON only in this schema:
 {
-  "objective": "What the user is trying to figure out",
-  "guiding_questions": [
-    "Primary question",
-    "Secondary question"
-  ]
+  "objective": "string",
+  "guiding_questions": ["string", "string"]
 }`;
 
-        const result = await flashModel.generateContent(prompt);
-        const text = result.response.text();
-        const jsonMatch = text.match(/\{[\s\S]*\}/);
+    const parsed = await runStructuredPrompt(flashModel, prompt, 'object', 0.2);
+    const objective = normalizeSentence(parsed?.objective, 220) || `Clarify the best path for ${userInput}`;
+    const guidingQuestions = normalizeStringArray(parsed?.guiding_questions, 2, 160);
 
-        if (jsonMatch) {
-            res.json(JSON.parse(jsonMatch[0]));
-        } else {
-            res.json({
-                objective: `Explore ideas related to ${userInput}`,
-                guiding_questions: [`What are the key aspects of ${userInput}?`]
-            });
-        }
-    } catch (error) {
-        console.error('Error in interpret-seed:', error);
-        res.status(500).json({ error: 'Failed to interpret seed' });
+    while (guidingQuestions.length < 2) {
+      const fallbackIndex = guidingQuestions.length + 1;
+      guidingQuestions.push(
+        fallbackIndex === 1
+          ? `What outcome should define success for ${normalizeSentence(userInput, 50)}?`
+          : `What constraints matter most before choosing a direction?`
+      );
     }
-});
 
-/**
- * POST /api/generate-ideas
- * Stage 2: Idea Node Generation
- */
-app.post('/api/generate-ideas', async (req, res) => {
-    try {
-        const { topic, context = {} } = req.body;
-
-        const contextText = context.objective
-            ? `The user's objective is: "${context.objective}"
-         Guiding questions: ${context.guiding_questions?.join(", ") || "None provided"}`
-            : "";
-
-        const parentChainText = context.parentChain?.length > 0
-            ? `The thinking chain so far: ${context.parentChain.join(" → ")}`
-            : "";
-
-        const prompt = `${contextText}
-${parentChainText}
-
-Generate 6–8 distinct idea nodes for brainstorming about: "${topic}"
-
-Rules:
-- Each idea must be a complete thought, not a keyword.
-- Maximum 15 words per idea.
-- Vary idea types among these categories:
-  - problem: Issues or challenges to address
-  - method: Approaches or techniques to apply
-  - application: Practical uses or implementations
-  - assumption: Beliefs or premises to examine
-  - opportunity: Potential benefits or openings
-- Make ideas concrete and non-generic.
-- Each idea should be actionable or thought-provoking.
-
-Return ONLY a valid JSON array of idea nodes following this schema:
-[
-  {
-    "id": "idea_1",
-    "type": "problem",
-    "content": "A complete thought in 15 words or less",
-    "expandable": true
+    return res.json({
+      objective,
+      guiding_questions: guidingQuestions
+    });
+  } catch (error) {
+    console.error('Error in interpret-seed:', error);
+    return res.status(500).json({ error: 'Failed to interpret seed' });
   }
-]
-
-Use sequential ids like idea_1, idea_2, etc.`;
-
-        const result = await flashModel.generateContent(prompt);
-        const text = result.response.text();
-        const jsonMatch = text.match(/\[[\s\S]*\]/);
-
-        if (jsonMatch) {
-            const parsed = JSON.parse(jsonMatch[0]);
-            const validated = parsed.map((node, index) => ({
-                id: node.id || `idea_${index + 1}`,
-                type: ['problem', 'method', 'application', 'assumption', 'opportunity'].includes(node.type)
-                    ? node.type
-                    : 'opportunity',
-                content: node.content?.slice(0, 100) || 'Explore this concept further',
-                expandable: node.expandable !== false
-            }));
-            res.json(validated);
-        } else {
-            res.json([
-                { id: "idea_1", type: "problem", content: "Define the core challenge", expandable: true },
-                { id: "idea_2", type: "method", content: "Research existing solutions", expandable: true },
-                { id: "idea_3", type: "application", content: "Identify practical use cases", expandable: true },
-                { id: "idea_4", type: "opportunity", content: "Explore market potential", expandable: true },
-                { id: "idea_5", type: "assumption", content: "Question key assumptions", expandable: true }
-            ]);
-        }
-    } catch (error) {
-        console.error('Error in generate-ideas:', error);
-        res.status(500).json({ error: 'Failed to generate ideas' });
-    }
 });
 
-/**
- * POST /api/cluster-directions
- * Stage 3: Direction Clustering
- */
-app.post('/api/cluster-directions', async (req, res) => {
-    try {
-        const { ideaNodes, objective } = req.body;
-        const nodesText = ideaNodes.map(n => `- ${n.id} (${n.type}): ${n.content}`).join("\n");
+addApiRoute('post', '/generate-ideas', async (req, res) => {
+  try {
+    const topic = normalizeSentence(req.body?.topic, 180);
+    const context = req.body?.context || {};
 
-        const prompt = `Given the thinking objective: "${objective}"
+    if (!topic) {
+      return res.status(400).json({ error: 'topic is required' });
+    }
 
-Here are the idea nodes to organize:
-${nodesText}
+    const objective = normalizeSentence(context.objective, 220);
+    const guidingQuestions = normalizeStringArray(context.guiding_questions, 3, 160);
+    const parentChain = normalizeStringArray(context.parentChain, 8, 100);
 
-Group these idea nodes into 3–5 coherent directions.
+    const contextSection = [
+      objective ? `Objective: ${objective}` : null,
+      guidingQuestions.length ? `Guiding questions: ${guidingQuestions.join(' | ')}` : null,
+      parentChain.length ? `Current path: ${parentChain.join(' -> ')}` : null
+    ].filter(Boolean).join('\n');
 
-For each direction:
-- Provide a concise title (max 5 words)
-- Write a brief summary (1-2 sentences explaining the theme)
-- List the idea IDs included
+    const prompt = `Role: You are generating high-quality next-step brainstorm nodes.
 
-Rules:
-- Group by conceptual similarity, not just wording.
-- Each idea must belong to one direction only.
-- Cover all provided ideas - don't leave any out.
-- Create meaningful groupings that help organize thinking.
+${contextSection}
 
-Return ONLY valid JSON in this format:
+Focus node:
+${JSON.stringify(topic)}
+
+Task:
+Generate 7 distinct idea nodes that expand the focus node.
+
+Hard constraints:
+- Each idea must be one complete thought and under 15 words.
+- Avoid repeating wording from the current path.
+- Prioritize concrete, testable, or decision-relevant ideas.
+- Mix categories. Include at least one: problem, method, application.
+
+Allowed types:
+- problem
+- method
+- application
+- assumption
+- opportunity
+
+Return JSON array only:
 [
   {
-    "direction_id": "D1",
-    "title": "Short clear name",
-    "summary": "1–2 sentence explanation of this direction's theme",
-    "idea_ids": ["idea_1", "idea_3"]
+    "type": "problem | method | application | assumption | opportunity",
+    "content": "string",
+    "expandable": true
   }
 ]`;
 
-        const result = await flashModel.generateContent(prompt);
-        const text = result.response.text();
-        const jsonMatch = text.match(/\[[\s\S]*\]/);
+    const parsed = await runStructuredPrompt(flashModel, prompt, 'array', 0.7);
+    const ideaNodes = normalizeIdeaNodes(parsed, topic);
 
-        if (jsonMatch) {
-            const parsed = JSON.parse(jsonMatch[0]);
-            const validated = parsed.map((dir, index) => ({
-                direction_id: dir.direction_id || `D${index + 1}`,
-                title: dir.title || `Direction ${index + 1}`,
-                summary: dir.summary || "Explore this theme further",
-                idea_ids: Array.isArray(dir.idea_ids) ? dir.idea_ids : []
-            }));
-            res.json(validated);
-        } else {
-            res.json([{
-                direction_id: "D1",
-                title: "Main Exploration",
-                summary: "All ideas grouped together for initial exploration",
-                idea_ids: ideaNodes.map(n => n.id)
-            }]);
-        }
-    } catch (error) {
-        console.error('Error in cluster-directions:', error);
-        res.status(500).json({ error: 'Failed to cluster directions' });
-    }
+    return res.json(ideaNodes);
+  } catch (error) {
+    console.error('Error in generate-ideas:', error);
+    return res.status(500).json({ error: 'Failed to generate ideas' });
+  }
 });
 
-/**
- * POST /api/synthesize
- * Stage 4: Synthesis Generation
- */
-app.post('/api/synthesize', async (req, res) => {
-    try {
-        const { objective, directions, ideaNodes } = req.body;
+addApiRoute('post', '/cluster-directions', async (req, res) => {
+  try {
+    const objective = normalizeSentence(req.body?.objective, 220);
+    const ideaNodes = normalizeInputIdeas(req.body?.ideaNodes);
 
-        const directionsText = directions.map(d => {
-            const ideas = d.idea_ids
-                .map(id => ideaNodes.find(n => n.id === id))
-                .filter(Boolean)
-                .map(n => `- ${n.content} (${n.type})`)
-                .join("\n    ");
-            return `Direction ${d.direction_id}: ${d.title}
-  Summary: ${d.summary}
-  Ideas:
-    ${ideas}`;
-        }).join("\n\n");
+    if (ideaNodes.length === 0) {
+      return res.json([]);
+    }
 
-        const prompt = `You are an expert thinking synthesizer.
+    if (ideaNodes.length === 1) {
+      return res.json([
+        {
+          direction_id: 'D1',
+          title: 'Single Direction',
+          summary: 'Only one explored idea is currently available.',
+          idea_ids: [ideaNodes[0].id]
+        }
+      ]);
+    }
 
-Using the structured brainstorm directions provided, generate a decision-oriented synthesis report.
+    const nodesText = ideaNodes.map((node) => `- ${node.id} (${node.type}): ${node.content}`).join('\n');
+    const prompt = `Role: You are organizing brainstorm nodes into strategic directions.
 
-Thinking Objective: "${objective}"
+Objective:
+${JSON.stringify(objective || 'Clarify best direction from explored ideas')}
+
+Idea nodes:
+${nodesText}
+
+Task:
+Group the nodes into 3 to 5 coherent directions.
+
+Hard constraints:
+- Every idea id must appear exactly once.
+- Group by strategy/theme, not by literal wording.
+- Direction title: maximum 5 words.
+- Direction summary: 1-2 sentences.
+
+Return JSON array only:
+[
+  {
+    "title": "string",
+    "summary": "string",
+    "idea_ids": ["idea_id_1", "idea_id_2"]
+  }
+]`;
+
+    const parsed = await runStructuredPrompt(flashModel, prompt, 'array', 0.3);
+    const directions = normalizeDirections(parsed, ideaNodes);
+
+    return res.json(directions);
+  } catch (error) {
+    console.error('Error in cluster-directions:', error);
+    return res.status(500).json({ error: 'Failed to cluster directions' });
+  }
+});
+
+addApiRoute('post', '/synthesize', async (req, res) => {
+  try {
+    const objective = normalizeSentence(req.body?.objective, 240) || 'Clarify the best strategic direction.';
+    const directions = Array.isArray(req.body?.directions)
+      ? req.body.directions
+        .map((direction) => ({
+          direction_id: normalizeSentence(direction?.direction_id, 12),
+          title: normalizeSentence(direction?.title, 60),
+          summary: normalizeSentence(direction?.summary, 220),
+          idea_ids: normalizeStringArray(direction?.idea_ids, 20, 80)
+        }))
+        .filter((direction) => direction.direction_id && direction.title)
+      : [];
+    const ideaNodes = normalizeInputIdeas(req.body?.ideaNodes);
+
+    if (!directions.length) {
+      return res.status(400).json({ error: 'directions are required before synthesis' });
+    }
+
+    const ideaMap = new Map(ideaNodes.map((node) => [node.id, node]));
+    const directionsText = directions.map((direction) => {
+      const lines = direction.idea_ids
+        .map((ideaId) => ideaMap.get(ideaId))
+        .filter(Boolean)
+        .map((node) => `- ${node.content} (${node.type})`)
+        .join('\n');
+      return `${direction.direction_id} | ${direction.title}
+Summary: ${direction.summary || 'No summary provided.'}
+Ideas:
+${lines || '- No matched ideas'}`;
+    }).join('\n\n');
+
+    const prompt = `Role: You are a decision-focused synthesis analyst.
+
+Objective:
+${JSON.stringify(objective)}
 
 Directions:
 ${directionsText}
 
-Your task is to:
-1. Restate the core problem or goal.
-2. Analyze each direction in terms of:
-   - value: What benefit does this direction offer?
-   - risks: What could go wrong?
-   - unknowns: What needs more research?
-3. Compare all directions.
-4. Recommend concrete next actions.
+Task:
+1. Restate the core goal.
+2. Analyze every direction with value, risks, unknowns, and potential.
+3. Compare directions and select most promising.
+4. Propose concrete next actions.
 
-Automatically adapt emphasis based on the nature of the ideas:
-- Research → research questions, investigation paths
-- Startup → feasibility, validation, execution
-- Product → user problems, solution framing
-- Exploration → learning goals and hypotheses
+Potential must be one of: high, medium, low.
+Detected mode must be one of: research, startup, product, exploration.
 
-Return ONLY valid JSON following this exact schema:
+Return JSON only:
 {
   "problem_statement": {
-    "interpreted_goal": "Clear statement of what user is trying to achieve",
-    "key_assumptions": ["assumption 1", "assumption 2"]
+    "interpreted_goal": "string",
+    "key_assumptions": ["string"]
   },
   "directions_analysis": [
     {
       "direction_id": "D1",
-      "value": "What this direction offers",
-      "risks": ["risk 1", "risk 2"],
-      "unknowns": ["unknown 1"],
-      "potential": "high"
+      "value": "string",
+      "risks": ["string"],
+      "unknowns": ["string"],
+      "potential": "high | medium | low"
     }
   ],
   "comparison": {
@@ -279,56 +589,35 @@ Return ONLY valid JSON following this exact schema:
     "should_deprioritize": ["D3"]
   },
   "next_actions": {
-    "immediate_steps": ["step 1", "step 2", "step 3"],
-    "questions_to_answer": ["question 1", "question 2"],
-    "validation_methods": ["method 1", "method 2"]
+    "immediate_steps": ["string"],
+    "questions_to_answer": ["string"],
+    "validation_methods": ["string"]
   },
-  "detected_mode": "research"
+  "detected_mode": "research | startup | product | exploration"
+}`;
+
+    let parsed;
+    try {
+      parsed = await runStructuredPrompt(proModel, prompt, 'object', 0.4);
+    } catch (proError) {
+      console.warn('Pro model synthesis failed; retrying with flash model:', proError.message);
+      parsed = await runStructuredPrompt(flashModel, prompt, 'object', 0.4);
+    }
+
+    const normalized = normalizeSynthesis(parsed, directions, objective);
+    return res.json(normalized);
+  } catch (error) {
+    console.error('Error in synthesize:', error);
+    return res.status(500).json({ error: 'Failed to generate synthesis' });
+  }
+});
+
+const isDirectRun = process.argv[1]?.endsWith('server.js');
+if (isDirectRun) {
+  app.listen(PORT, () => {
+    console.log(`API server running at http://localhost:${PORT}`);
+    console.log(`Gemini models loaded: flash=${FLASH_MODEL_NAME}, pro=${PRO_MODEL_NAME}`);
+  });
 }
 
-For potential field, use only: "high", "medium", or "low"
-For detected_mode, use only: "research", "startup", "product", or "exploration"`;
-
-        const result = await proModel.generateContent(prompt);
-        const text = result.response.text();
-        const jsonMatch = text.match(/\{[\s\S]*\}/);
-
-        if (jsonMatch) {
-            res.json(JSON.parse(jsonMatch[0]));
-        } else {
-            res.json({
-                problem_statement: {
-                    interpreted_goal: objective,
-                    key_assumptions: ["Standard market conditions apply"]
-                },
-                directions_analysis: directions.map(d => ({
-                    direction_id: d.direction_id,
-                    value: d.summary,
-                    risks: ["Needs further validation"],
-                    unknowns: ["Market size", "Competition"],
-                    potential: "medium"
-                })),
-                comparison: {
-                    most_promising: directions[0]?.direction_id || "D1",
-                    can_be_combined: [],
-                    should_deprioritize: []
-                },
-                next_actions: {
-                    immediate_steps: ["Conduct research", "Validate assumptions", "Create prototype"],
-                    questions_to_answer: ["Who is the target audience?", "What makes this unique?"],
-                    validation_methods: ["User interviews", "Market analysis"]
-                },
-                detected_mode: "exploration"
-            });
-        }
-    } catch (error) {
-        console.error('Error in synthesize:', error);
-        res.status(500).json({ error: 'Failed to generate synthesis' });
-    }
-});
-
-// Start server
-app.listen(PORT, () => {
-    console.log(`🚀 API Server running on http://localhost:${PORT}`);
-    console.log(`✅ Gemini API key loaded (hidden from browser)`);
-});
+export default app;

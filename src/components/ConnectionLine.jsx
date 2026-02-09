@@ -1,4 +1,4 @@
-import { motion } from "motion/react";
+import { motion as Motion } from "motion/react";
 
 export default function ConnectionLine({ from, to, isInChain = false, curveOffset = 0 }) {
   if (!from || !to) return null;
@@ -20,7 +20,7 @@ export default function ConnectionLine({ from, to, isInChain = false, curveOffse
   const path = `M ${x1} ${y1} Q ${cx} ${cy} ${x2} ${y2}`;
 
   return (
-    <motion.path
+    <Motion.path
       d={path}
       stroke={isInChain ? "url(#chainGradient)" : "url(#subtopicGradient)"}
       strokeWidth={isInChain ? 3 : 2}

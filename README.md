@@ -62,11 +62,14 @@ npm run dev
 
 ### Configuration
 
-Set your Gemini API key in `src/services/gemini.js`:
+Create a `.env` file in the project root and set your Gemini API key:
 
-```javascript
-const API_KEY = "your-gemini-api-key-here";
+```bash
+GEMINI_API_KEY=your-gemini-api-key-here
+PORT=3001
 ```
+
+The key is used by `server.js` only and is never exposed to the browser.
 
 ---
 
