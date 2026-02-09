@@ -5,27 +5,42 @@
 
 const API_BASE = '/api';
 
+async function readApiError(response) {
+  let payload = null;
+  try {
+    payload = await response.json();
+  } catch {
+    // Ignore parse errors and fall back to status text.
+  }
+
+  const errorText = typeof payload?.error === "string" ? payload.error : "";
+  const detailsText = typeof payload?.details === "string" ? payload.details : "";
+
+  if (errorText && detailsText) return `${errorText} (${detailsText})`;
+  if (errorText) return errorText;
+  return `API error: ${response.status}`;
+}
+
+async function postJson(path, body) {
+  const response = await fetch(`${API_BASE}${path}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body)
+  });
+
+  if (!response.ok) {
+    throw new Error(await readApiError(response));
+  }
+
+  return await response.json();
+}
+
 /**
  * Stage 1 — Seed Interpretation
  * Converts user input into clear thinking objective and guiding questions
  */
 export async function interpretSeed(userInput) {
-  try {
-    const response = await fetch(`${API_BASE}/interpret-seed`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ userInput })
-    });
-
-    if (!response.ok) {
-      throw new Error(`API error: ${response.status}`);
-    }
-
-    return await response.json();
-  } catch (error) {
-    console.error("Error interpreting seed:", error);
-    throw error;
-  }
+  return await postJson('/interpret-seed', { userInput });
 }
 
 /**
@@ -33,22 +48,7 @@ export async function interpretSeed(userInput) {
  * Generates meaningful thinking units (Idea Nodes)
  */
 export async function generateIdeaNodes(topic, context = {}) {
-  try {
-    const response = await fetch(`${API_BASE}/generate-ideas`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ topic, context })
-    });
-
-    if (!response.ok) {
-      throw new Error(`API error: ${response.status}`);
-    }
-
-    return await response.json();
-  } catch (error) {
-    console.error("Error generating idea nodes:", error);
-    throw error;
-  }
+  return await postJson('/generate-ideas', { topic, context });
 }
 
 /**
@@ -56,22 +56,7 @@ export async function generateIdeaNodes(topic, context = {}) {
  * Groups idea nodes into coherent directions
  */
 export async function clusterIntoDirections(ideaNodes, objective) {
-  try {
-    const response = await fetch(`${API_BASE}/cluster-directions`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ ideaNodes, objective })
-    });
-
-    if (!response.ok) {
-      throw new Error(`API error: ${response.status}`);
-    }
-
-    return await response.json();
-  } catch (error) {
-    console.error("Error clustering directions:", error);
-    throw error;
-  }
+  return await postJson('/cluster-directions', { ideaNodes, objective });
 }
 
 /**
@@ -79,22 +64,7 @@ export async function clusterIntoDirections(ideaNodes, objective) {
  * Generates decision-oriented synthesis report
  */
 export async function generateSynthesis(objective, directions, ideaNodes) {
-  try {
-    const response = await fetch(`${API_BASE}/synthesize`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ objective, directions, ideaNodes })
-    });
-
-    if (!response.ok) {
-      throw new Error(`API error: ${response.status}`);
-    }
-
-    return await response.json();
-  } catch (error) {
-    console.error("Error generating synthesis:", error);
-    throw error;
-  }
+  return await postJson('/synthesize', { objective, directions, ideaNodes });
 }
 
 /**

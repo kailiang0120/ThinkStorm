@@ -146,6 +146,56 @@ async function runStructuredPrompt(model, prompt, expectedType = 'object', tempe
   return parsed;
 }
 
+function buildApiErrorResponse(error, fallbackMessage) {
+  const message = normalizeSentence(error?.message, 260);
+  const status = Number(error?.status);
+
+  if (/api key was reported as leaked/i.test(message)) {
+    return {
+      status: 401,
+      payload: {
+        error: 'Gemini API key is revoked (reported leaked). Create a new key and update GEMINI_API_KEY.'
+      }
+    };
+  }
+
+  if (/api key (is not valid|invalid)|permission denied|unauthenticated/i.test(message)) {
+    return {
+      status: 401,
+      payload: {
+        error: 'Gemini API key is invalid or unauthorized. Check GEMINI_API_KEY and key permissions.'
+      }
+    };
+  }
+
+  if (status === 429 || /quota|rate limit|resource exhausted/i.test(message)) {
+    return {
+      status: 429,
+      payload: {
+        error: 'Gemini quota or rate limit reached. Retry later or use a key with available quota.'
+      }
+    };
+  }
+
+  if (status >= 400 && status <= 599) {
+    return {
+      status,
+      payload: {
+        error: fallbackMessage,
+        details: message || `Gemini request failed with status ${status}.`
+      }
+    };
+  }
+
+  return {
+    status: 500,
+    payload: {
+      error: fallbackMessage,
+      details: message || 'Unexpected server error.'
+    }
+  };
+}
+
 function addApiRoute(method, path, handler) {
   app[method]([`/api${path}`, path], handler);
 }
@@ -397,7 +447,8 @@ Return JSON only in this schema:
     });
   } catch (error) {
     console.error('Error in interpret-seed:', error);
-    return res.status(500).json({ error: 'Failed to interpret seed' });
+    const response = buildApiErrorResponse(error, 'Failed to interpret seed');
+    return res.status(response.status).json(response.payload);
   }
 });
 
@@ -458,7 +509,8 @@ Return JSON array only:
     return res.json(ideaNodes);
   } catch (error) {
     console.error('Error in generate-ideas:', error);
-    return res.status(500).json({ error: 'Failed to generate ideas' });
+    const response = buildApiErrorResponse(error, 'Failed to generate ideas');
+    return res.status(response.status).json(response.payload);
   }
 });
 
@@ -515,7 +567,8 @@ Return JSON array only:
     return res.json(directions);
   } catch (error) {
     console.error('Error in cluster-directions:', error);
-    return res.status(500).json({ error: 'Failed to cluster directions' });
+    const response = buildApiErrorResponse(error, 'Failed to cluster directions');
+    return res.status(response.status).json(response.payload);
   }
 });
 
@@ -608,7 +661,8 @@ Return JSON only:
     return res.json(normalized);
   } catch (error) {
     console.error('Error in synthesize:', error);
-    return res.status(500).json({ error: 'Failed to generate synthesis' });
+    const response = buildApiErrorResponse(error, 'Failed to generate synthesis');
+    return res.status(response.status).json(response.payload);
   }
 });
 
