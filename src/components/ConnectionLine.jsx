@@ -15,8 +15,10 @@ export default function ConnectionLine({ from, to, isInChain = false, curveOffse
   const len = Math.hypot(dx, dy) || 1;
   const nx = -dy / len;
   const ny = dx / len;
-  const cx = mx + nx * curveOffset;
-  const cy = my + ny * curveOffset;
+  // Avoid a degenerate straight-vertical path that can disappear with gradient rendering.
+  const effectiveCurveOffset = Math.abs(dx) < 0.5 && Math.abs(curveOffset) < 0.5 ? 8 : curveOffset;
+  const cx = mx + nx * effectiveCurveOffset;
+  const cy = my + ny * effectiveCurveOffset;
   const path = `M ${x1} ${y1} Q ${cx} ${cy} ${x2} ${y2}`;
 
   return (
@@ -41,11 +43,25 @@ export default function ConnectionLine({ from, to, isInChain = false, curveOffse
 export function ConnectionGradients() {
   return (
     <defs>
-      <linearGradient id="chainGradient" x1="0%" y1="0%" x2="100%" y2="100%">
+      <linearGradient
+        id="chainGradient"
+        gradientUnits="userSpaceOnUse"
+        x1="0%"
+        y1="0%"
+        x2="100%"
+        y2="100%"
+      >
         <stop offset="0%" stopColor="#10b981" />
         <stop offset="100%" stopColor="#06b6d4" />
       </linearGradient>
-      <linearGradient id="subtopicGradient" x1="0%" y1="0%" x2="100%" y2="100%">
+      <linearGradient
+        id="subtopicGradient"
+        gradientUnits="userSpaceOnUse"
+        x1="0%"
+        y1="0%"
+        x2="100%"
+        y2="100%"
+      >
         <stop offset="0%" stopColor="rgba(139, 92, 246, 0.6)" />
         <stop offset="100%" stopColor="rgba(6, 182, 212, 0.6)" />
       </linearGradient>

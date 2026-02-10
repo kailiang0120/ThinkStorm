@@ -15,7 +15,7 @@ app.use(express.json({ limit: '1mb' }));
 
 const API_KEY = process.env.GEMINI_API_KEY;
 const FLASH_MODEL_NAME = process.env.GEMINI_FLASH_MODEL || 'gemini-3-flash-preview';
-const PRO_MODEL_NAME = process.env.GEMINI_PRO_MODEL || 'gemini-3-pro-preview';
+const PRO_MODEL_NAME = process.env.GEMINI_PRO_MODEL || 'gemini-3-flash-preview';
 let flashModel = null;
 let proModel = null;
 

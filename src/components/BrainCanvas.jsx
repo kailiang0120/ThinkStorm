@@ -50,8 +50,15 @@ export default function BrainCanvas() {
   const [activeNodeId, setActiveNodeId] = useState(null);
   const [thinkingChain, setThinkingChain] = useState([]);
   const [viewOffset, setViewOffset] = useState({ x: 0, y: 0 });
+  const [isPanningCanvas, setIsPanningCanvas] = useState(false);
   const canvasRef = useRef(null);
   const nodeIdCounter = useRef(0);
+  const dragPanStateRef = useRef({
+    isActive: false,
+    pointerId: null,
+    lastX: 0,
+    lastY: 0
+  });
 
   // Structure & Synthesis
   const [directions, setDirections] = useState([]);
@@ -81,6 +88,64 @@ export default function BrainCanvas() {
       y: yOffset - nodePos.y
     });
   }, [getViewportCenter]);
+
+  const stopCanvasPan = useCallback((event) => {
+    const drag = dragPanStateRef.current;
+    if (!drag.isActive || drag.pointerId !== event.pointerId) return;
+
+    drag.isActive = false;
+    drag.pointerId = null;
+    setIsPanningCanvas(false);
+    event.currentTarget.releasePointerCapture?.(event.pointerId);
+  }, []);
+
+  const handleCanvasPointerDown = useCallback((event) => {
+    if (event.button !== 0 && event.pointerType !== "touch") return;
+
+    const target = event.target;
+    if (target instanceof Element && target.closest(".think-node")) return;
+
+    dragPanStateRef.current = {
+      isActive: true,
+      pointerId: event.pointerId,
+      lastX: event.clientX,
+      lastY: event.clientY
+    };
+
+    setIsPanningCanvas(true);
+    event.currentTarget.setPointerCapture?.(event.pointerId);
+    event.preventDefault();
+  }, []);
+
+  const handleCanvasPointerMove = useCallback((event) => {
+    const drag = dragPanStateRef.current;
+    if (!drag.isActive || drag.pointerId !== event.pointerId) return;
+
+    const dx = event.clientX - drag.lastX;
+    const dy = event.clientY - drag.lastY;
+    if (dx === 0 && dy === 0) return;
+
+    drag.lastX = event.clientX;
+    drag.lastY = event.clientY;
+
+    setViewOffset(prev => ({
+      x: prev.x + dx,
+      y: prev.y + dy
+    }));
+
+    event.preventDefault();
+  }, []);
+
+  const handleCanvasWheel = useCallback((event) => {
+    if (event.deltaX === 0 && event.deltaY === 0) return;
+
+    setViewOffset(prev => ({
+      x: prev.x - event.deltaX,
+      y: prev.y - event.deltaY
+    }));
+
+    event.preventDefault();
+  }, []);
 
   // Calculate positions for subnodes in a fan pattern BELOW the parent
   const calculateRadialPositions = useCallback((parentPos, count) => {
@@ -464,6 +529,13 @@ export default function BrainCanvas() {
     setSynthesis(null);
     setShowFinalOutput(false);
     setError("");
+    setIsPanningCanvas(false);
+    dragPanStateRef.current = {
+      isActive: false,
+      pointerId: null,
+      lastX: 0,
+      lastY: 0
+    };
     nodeIdCounter.current = 0;
   };
 
@@ -583,18 +655,28 @@ export default function BrainCanvas() {
 
       {/* Canvas Area with Spider-Web Nodes */}
       {currentStage >= STAGES.EXPAND && currentStage < STAGES.SYNTHESIZE && (
-        <div className="canvas-area" ref={canvasRef}>
+        <div
+          className={`canvas-area ${isPanningCanvas ? "panning" : ""}`}
+          ref={canvasRef}
+          onPointerDown={handleCanvasPointerDown}
+          onPointerMove={handleCanvasPointerMove}
+          onPointerUp={stopCanvasPan}
+          onPointerCancel={stopCanvasPan}
+          onWheel={handleCanvasWheel}
+        >
           <Motion.div
             className="canvas-viewport"
             animate={{
               x: viewOffset.x,
               y: viewOffset.y
             }}
-            transition={{
-              type: "spring",
-              stiffness: 100,
-              damping: 20
-            }}
+            transition={isPanningCanvas
+              ? { duration: 0 }
+              : {
+                type: "spring",
+                stiffness: 100,
+                damping: 20
+              }}
           >
             {/* Connection Lines */}
             <svg className="connections-layer">
