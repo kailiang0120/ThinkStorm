@@ -11,8 +11,8 @@
     "lint": "eslint .",
     "test": "vitest run",
     "preview": "vite preview",
-    "cloudflare:dev": "npm run build && wrangler pages dev dist --functions-directory functions",
-    "cloudflare:deploy": "npm run build && wrangler pages deploy dist --project-name thinkstorm",
+    "cloudflare:dev": "npm run build && wrangler dev --config wrangler.toml",
+    "cloudflare:deploy": "npm run build && wrangler deploy --config wrangler.toml",
     "deploy": "npm run cloudflare:deploy"
   },
   "dependencies": {

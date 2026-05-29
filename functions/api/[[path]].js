@@ -43,7 +43,7 @@ const seedResponseSchema = {
 
 const ideaNodesResponseSchema = {
   type: Type.ARRAY,
-  maxItems: 8,
+  maxItems: 5,
   items: {
     type: Type.OBJECT,
     properties: {
@@ -245,8 +245,7 @@ function normalizeIdeaNodes(rawNodes, topic) {
     { type: 'method', content: `How can we test assumptions about ${shortTopic} quickly?`, expandable: true },
     { type: 'application', content: `Which concrete use case of ${shortTopic} should be validated first?`, expandable: true },
     { type: 'assumption', content: `Which hidden constraint about ${shortTopic} could make this fail?`, expandable: true },
-    { type: 'opportunity', content: `Where could ${shortTopic} create disproportionate value?`, expandable: true },
-    { type: 'method', content: `What experiment would de-risk ${shortTopic} in one week?`, expandable: true }
+    { type: 'opportunity', content: `Where could ${shortTopic} create disproportionate value?`, expandable: true }
   ];
 
   const unique = [];
@@ -268,7 +267,7 @@ function normalizeIdeaNodes(rawNodes, topic) {
   });
 
   fallback.forEach((node) => {
-    if (unique.length >= 7) return;
+    if (unique.length >= 5) return;
     const dedupeKey = node.content.toLowerCase();
     if (seenContent.has(dedupeKey)) return;
     seenContent.add(dedupeKey);
@@ -278,7 +277,7 @@ function normalizeIdeaNodes(rawNodes, topic) {
     });
   });
 
-  return unique.slice(0, 8);
+  return unique.slice(0, 5);
 }
 
 function normalizeInputIdeas(rawIdeaNodes) {
@@ -434,22 +433,21 @@ async function interpretSeed(request, env) {
   const userInput = normalizeSentence(body?.userInput, 220);
   if (!userInput) return { status: 400, payload: { error: 'userInput is required' } };
 
-  const prompt = `Role: You are a precision problem-framing assistant.
+  const prompt = `You are a precision problem-framing assistant.
 
 User topic:
 ${JSON.stringify(userInput)}
 
-Task:
-1. Rewrite the topic into one concrete thinking objective.
-2. Provide exactly 2 guiding questions that clarify what decision or understanding is needed.
+Do two things:
+1. Rewrite the topic into ONE concrete thinking objective — what the user is really trying to decide or understand.
+2. Write exactly 2 sharp, decision-oriented guiding questions.
 
-Constraints:
-- Do not generate solutions or action plans.
-- Keep objective under 20 words.
-- Keep each guiding question under 18 words.
-- Questions must be decision-oriented, not generic.
+Rules:
+- Do not propose solutions or action plans.
+- Objective under 20 words; each question under 18 words.
+- Questions must be specific to this topic, never generic filler.
 
-Return JSON only in this schema:
+Return JSON only:
 {
   "objective": "string",
   "guiding_questions": ["string", "string"]
@@ -457,7 +455,7 @@ Return JSON only in this schema:
 
   const parsed = await runStructuredPrompt(
     env,
-    env.GEMINI_FLASH_MODEL || 'gemini-3-flash-preview',
+    env.GEMINI_FLASH_MODEL || env.GEMINI_MODEL || 'gemini-3-flash-preview',
     prompt,
     seedResponseSchema,
     0.2
@@ -491,41 +489,31 @@ async function generateIdeas(request, env) {
     parentChain.length ? `Current path: ${parentChain.join(' -> ')}` : null
   ].filter(Boolean).join('\n');
 
-  const prompt = `Role: You are generating high-quality next-step brainstorm nodes.
+  const prompt = `You are an elite brainstorming partner. You expand one idea into sharp, surprising, decision-ready branches.
 
 ${contextSection}
 
 Focus node:
 ${JSON.stringify(topic)}
 
-Task:
-Generate 7 distinct idea nodes that expand the focus node.
+Generate exactly 5 idea nodes that branch from the focus node.
 
-Hard constraints:
-- Each idea must be one complete thought and under 15 words.
-- Avoid repeating wording from the current path.
-- Prioritize concrete, testable, or decision-relevant ideas.
-- Mix categories. Include at least one: problem, method, application.
+Rules:
+- Each idea is ONE crisp, self-contained thought, under 14 words.
+- Make the 5 ideas maximally different from each other — a distinct angle each, no overlap.
+- Be concrete and specific; never vague or generic.
+- Favor ideas that are testable, provocative, or directly decision-relevant.
+- Do not echo wording already used in the current path.
+- Use a mix of types and include at least one "problem", one "method", and one "application".
 
-Allowed types:
-- problem
-- method
-- application
-- assumption
-- opportunity
+Allowed types: problem, method, application, assumption, opportunity.
 
-Return JSON array only:
-[
-  {
-    "type": "problem | method | application | assumption | opportunity",
-    "content": "string",
-    "expandable": true
-  }
-]`;
+Return a JSON array of exactly 5 objects, each:
+{ "type": "problem | method | application | assumption | opportunity", "content": "string", "expandable": true }`;
 
   const parsed = await runStructuredPrompt(
     env,
-    env.GEMINI_FLASH_MODEL || 'gemini-3-flash-preview',
+    env.GEMINI_FLASH_MODEL || env.GEMINI_MODEL || 'gemini-3-flash-preview',
     prompt,
     ideaNodesResponseSchema,
     0.7
@@ -580,7 +568,7 @@ Return JSON array only:
 
   const parsed = await runStructuredPrompt(
     env,
-    env.GEMINI_FLASH_MODEL || 'gemini-3-flash-preview',
+    env.GEMINI_FLASH_MODEL || env.GEMINI_MODEL || 'gemini-3-flash-preview',
     prompt,
     directionsResponseSchema,
     0.3
@@ -669,7 +657,7 @@ Return JSON only:
   try {
     parsed = await runStructuredPrompt(
       env,
-      env.GEMINI_PRO_MODEL || 'gemini-3-flash-preview',
+      env.GEMINI_PRO_MODEL || env.GEMINI_MODEL || 'gemini-3-flash-preview',
       prompt,
       synthesisResponseSchema,
       0.4
@@ -677,7 +665,7 @@ Return JSON only:
   } catch {
     parsed = await runStructuredPrompt(
       env,
-      env.GEMINI_FLASH_MODEL || 'gemini-3-flash-preview',
+      env.GEMINI_FLASH_MODEL || env.GEMINI_MODEL || 'gemini-3-flash-preview',
       prompt,
       synthesisResponseSchema,
       0.4
@@ -712,8 +700,8 @@ export async function onRequest(context) {
     if (request.method === 'GET' && path === '/health') {
       return jsonResponse(request, env, 200, {
         ok: true,
-        flash_model: env.GEMINI_FLASH_MODEL || 'gemini-3-flash-preview',
-        pro_model: env.GEMINI_PRO_MODEL || 'gemini-3-flash-preview'
+        flash_model: env.GEMINI_FLASH_MODEL || env.GEMINI_MODEL || 'gemini-3-flash-preview',
+        pro_model: env.GEMINI_PRO_MODEL || env.GEMINI_MODEL || 'gemini-3-flash-preview'
       });
     }
 
