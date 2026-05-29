@@ -1,0 +1,8 @@
+# Local Cloudflare Pages secrets for `npx wrangler pages dev dist`.
+# Copy this file to `.dev.vars` and fill values locally. Do not commit `.dev.vars`.
+
+GEMINI_API_KEY=replace_with_local_key
+
+# Optional shared token for API requests. If set here, also set
+# VITE_API_REQUEST_TOKEN in `.env.local` for the Vite client.
+# API_REQUEST_TOKEN=replace_with_random_token

@@ -4,6 +4,7 @@
  */
 
 const API_BASE = '/api';
+const API_REQUEST_TOKEN = import.meta.env.VITE_API_REQUEST_TOKEN || '';
 
 async function readApiError(response) {
   let payload = null;
@@ -22,9 +23,14 @@ async function readApiError(response) {
 }
 
 async function postJson(path, body) {
+  const headers = { 'Content-Type': 'application/json' };
+  if (API_REQUEST_TOKEN) {
+    headers['X-ThinkStorm-Token'] = API_REQUEST_TOKEN;
+  }
+
   const response = await fetch(`${API_BASE}${path}`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers,
     body: JSON.stringify(body)
   });
 

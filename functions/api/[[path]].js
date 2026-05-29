@@ -1,15 +1,9 @@
-/* global process */
-
-import express from 'express';
-import cors from 'cors';
-import rateLimit from 'express-rate-limit';
 import { GoogleGenAI, Type } from '@google/genai';
-import dotenv from 'dotenv';
 
-dotenv.config();
-
-const app = express();
-const PORT = process.env.PORT || 3001;
+const IDEA_TYPES = ['problem', 'method', 'application', 'assumption', 'opportunity'];
+const IDEA_TYPES_SET = new Set(IDEA_TYPES);
+const POTENTIAL_LEVELS_SET = new Set(['high', 'medium', 'low']);
+const SYNTHESIS_MODES_SET = new Set(['research', 'startup', 'product', 'exploration']);
 
 const DEFAULT_ALLOWED_ORIGINS = [
   'http://localhost:5173',
@@ -17,72 +11,6 @@ const DEFAULT_ALLOWED_ORIGINS = [
   'http://localhost:4173',
   'http://127.0.0.1:4173'
 ];
-const ALLOWED_ORIGINS = (process.env.ALLOWED_ORIGINS || DEFAULT_ALLOWED_ORIGINS.join(','))
-  .split(',')
-  .map((origin) => origin.trim())
-  .filter(Boolean);
-const ALLOWED_ORIGIN_SET = new Set(ALLOWED_ORIGINS);
-const API_REQUEST_TOKEN = process.env.API_REQUEST_TOKEN || '';
-
-app.use(cors({
-  origin(origin, callback) {
-    if (!origin || ALLOWED_ORIGIN_SET.has(origin)) {
-      callback(null, true);
-      return;
-    }
-    callback(new Error('Origin is not allowed by CORS'));
-  }
-}));
-app.use(express.json({ limit: '1mb' }));
-
-app.use(rateLimit({
-  windowMs: Number(process.env.RATE_LIMIT_WINDOW_MS || 15 * 60 * 1000),
-  limit: Number(process.env.RATE_LIMIT_MAX || 60),
-  standardHeaders: 'draft-8',
-  legacyHeaders: false,
-  message: {
-    error: 'Too many requests. Please wait before asking Gemini for more output.'
-  }
-}));
-
-app.use((req, res, next) => {
-  if (!API_REQUEST_TOKEN || req.method === 'GET' && req.path.endsWith('/health')) {
-    next();
-    return;
-  }
-
-  const authHeader = req.get('authorization') || '';
-  const bearerToken = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : '';
-  const requestToken = req.get('x-thinkstorm-token') || bearerToken;
-
-  if (requestToken === API_REQUEST_TOKEN) {
-    next();
-    return;
-  }
-
-  res.status(401).json({ error: 'Missing or invalid request token.' });
-});
-
-const API_KEY = process.env.GEMINI_API_KEY;
-// Single knob for the preferred Gemini model. Per-stage overrides win if set:
-//   GEMINI_MODEL          -> default for every call
-//   GEMINI_FLASH_MODEL    -> fast path (seed / ideas / clustering)
-//   GEMINI_PRO_MODEL      -> synthesis
-const DEFAULT_MODEL_NAME = process.env.GEMINI_MODEL || 'gemini-3-flash-preview';
-const FLASH_MODEL_NAME = process.env.GEMINI_FLASH_MODEL || DEFAULT_MODEL_NAME;
-const PRO_MODEL_NAME = process.env.GEMINI_PRO_MODEL || DEFAULT_MODEL_NAME;
-let genAI = null;
-
-if (!API_KEY) {
-  console.error('Missing GEMINI_API_KEY in environment variables');
-} else {
-  genAI = new GoogleGenAI({ apiKey: API_KEY });
-}
-
-const IDEA_TYPES = ['problem', 'method', 'application', 'assumption', 'opportunity'];
-const IDEA_TYPES_SET = new Set(IDEA_TYPES);
-const POTENTIAL_LEVELS_SET = new Set(['high', 'medium', 'low']);
-const SYNTHESIS_MODES_SET = new Set(['research', 'startup', 'product', 'exploration']);
 
 function normalizeSentence(value, maxLength = 180) {
   if (typeof value !== 'string') return '';
@@ -91,10 +19,10 @@ function normalizeSentence(value, maxLength = 180) {
 
 function normalizeStringArray(value, maxItems = 5, maxLength = 160) {
   if (!Array.isArray(value)) return [];
-  const normalized = value
+  return value
     .map((item) => normalizeSentence(item, maxLength))
-    .filter(Boolean);
-  return normalized.slice(0, maxItems);
+    .filter(Boolean)
+    .slice(0, maxItems);
 }
 
 const stringArraySchema = (maxItems = 5) => ({
@@ -115,7 +43,7 @@ const seedResponseSchema = {
 
 const ideaNodesResponseSchema = {
   type: Type.ARRAY,
-  maxItems: 5,
+  maxItems: 8,
   items: {
     type: Type.OBJECT,
     properties: {
@@ -196,26 +124,37 @@ const synthesisResponseSchema = {
   propertyOrdering: ['problem_statement', 'directions_analysis', 'comparison', 'next_actions', 'detected_mode']
 };
 
-async function runStructuredPrompt(modelName, prompt, responseJsonSchema, temperature = 0.4) {
-  if (!genAI) {
-    throw new Error('Gemini model is not initialized. Check GEMINI_API_KEY.');
+function getAllowedOrigins(env) {
+  const configured = env.ALLOWED_ORIGINS || env.CF_PAGES_URL || '';
+  return new Set([
+    ...DEFAULT_ALLOWED_ORIGINS,
+    ...configured.split(',').map((origin) => origin.trim()).filter(Boolean)
+  ]);
+}
+
+function corsHeaders(request, env) {
+  const origin = request.headers.get('Origin') || '';
+  const headers = {
+    'Access-Control-Allow-Methods': 'GET,POST,OPTIONS',
+    'Access-Control-Allow-Headers': 'Content-Type,Authorization,X-ThinkStorm-Token',
+    'Vary': 'Origin'
+  };
+
+  if (origin && getAllowedOrigins(env).has(origin)) {
+    headers['Access-Control-Allow-Origin'] = origin;
   }
 
-  const response = await genAI.models.generateContent({
-    model: modelName,
-    contents: prompt,
-    config: {
-      responseMimeType: 'application/json',
-      responseJsonSchema,
-      temperature
+  return headers;
+}
+
+function jsonResponse(request, env, status, payload) {
+  return new Response(JSON.stringify(payload), {
+    status,
+    headers: {
+      ...corsHeaders(request, env),
+      'Content-Type': 'application/json'
     }
   });
-
-  try {
-    return JSON.parse(response.text || 'null');
-  } catch (parseError) {
-    throw new Error(`Gemini returned invalid structured JSON: ${parseError.message}`);
-  }
 }
 
 function buildApiErrorResponse(error, fallbackMessage) {
@@ -268,8 +207,35 @@ function buildApiErrorResponse(error, fallbackMessage) {
   };
 }
 
-function addApiRoute(method, path, handler) {
-  app[method]([`/api${path}`, path], handler);
+async function readJsonBody(request) {
+  try {
+    return await request.json();
+  } catch {
+    return {};
+  }
+}
+
+async function runStructuredPrompt(env, modelName, prompt, responseJsonSchema, temperature = 0.4) {
+  if (!env.GEMINI_API_KEY) {
+    throw new Error('Gemini model is not initialized. Check GEMINI_API_KEY.');
+  }
+
+  const ai = new GoogleGenAI({ apiKey: env.GEMINI_API_KEY });
+  const response = await ai.models.generateContent({
+    model: modelName,
+    contents: prompt,
+    config: {
+      responseMimeType: 'application/json',
+      responseJsonSchema,
+      temperature
+    }
+  });
+
+  try {
+    return JSON.parse(response.text || 'null');
+  } catch (parseError) {
+    throw new Error(`Gemini returned invalid structured JSON: ${parseError.message}`);
+  }
 }
 
 function normalizeIdeaNodes(rawNodes, topic) {
@@ -279,7 +245,8 @@ function normalizeIdeaNodes(rawNodes, topic) {
     { type: 'method', content: `How can we test assumptions about ${shortTopic} quickly?`, expandable: true },
     { type: 'application', content: `Which concrete use case of ${shortTopic} should be validated first?`, expandable: true },
     { type: 'assumption', content: `Which hidden constraint about ${shortTopic} could make this fail?`, expandable: true },
-    { type: 'opportunity', content: `Where could ${shortTopic} create disproportionate value?`, expandable: true }
+    { type: 'opportunity', content: `Where could ${shortTopic} create disproportionate value?`, expandable: true },
+    { type: 'method', content: `What experiment would de-risk ${shortTopic} in one week?`, expandable: true }
   ];
 
   const unique = [];
@@ -301,7 +268,7 @@ function normalizeIdeaNodes(rawNodes, topic) {
   });
 
   fallback.forEach((node) => {
-    if (unique.length >= 5) return;
+    if (unique.length >= 7) return;
     const dedupeKey = node.content.toLowerCase();
     if (seenContent.has(dedupeKey)) return;
     seenContent.add(dedupeKey);
@@ -311,7 +278,7 @@ function normalizeIdeaNodes(rawNodes, topic) {
     });
   });
 
-  return unique.slice(0, 5);
+  return unique.slice(0, 8);
 }
 
 function normalizeInputIdeas(rawIdeaNodes) {
@@ -345,8 +312,8 @@ function normalizeDirections(rawDirections, ideaNodes) {
     const title = normalizeSentence(direction?.title, 48);
     const summary = normalizeSentence(direction?.summary, 220);
     const rawIds = normalizeStringArray(direction?.idea_ids, validIdeaIds.length, 80);
-
     const dedupedIds = [];
+
     rawIds.forEach((id) => {
       if (!validIdeaIdSet.has(id) || usedIdeaIds.has(id)) return;
       usedIdeaIds.add(id);
@@ -427,22 +394,15 @@ function normalizeSynthesis(rawSynthesis, directions, objective) {
   });
 
   const directionsAnalysis = directionIds.map((directionId) => analysisMap.get(directionId));
-
-  const filterDirectionList = (value) => {
-    if (!Array.isArray(value)) return [];
-    return value.filter((id) => directionIdSet.has(id)).slice(0, 3);
-  };
-
+  const filterDirectionList = (value) => (
+    Array.isArray(value) ? value.filter((id) => directionIdSet.has(id)).slice(0, 3) : []
+  );
   const fallbackMostPromising = directionsAnalysis.find((item) => item.potential === 'high')?.direction_id
     || directionIds[0]
     || 'D1';
   const mostPromising = directionIdSet.has(rawSynthesis?.comparison?.most_promising)
     ? rawSynthesis.comparison.most_promising
     : fallbackMostPromising;
-
-  const mode = SYNTHESIS_MODES_SET.has(rawSynthesis?.detected_mode)
-    ? rawSynthesis.detected_mode
-    : 'exploration';
 
   return {
     problem_statement: {
@@ -463,144 +423,136 @@ function normalizeSynthesis(rawSynthesis, directions, objective) {
       questions_to_answer: normalizeStringArray(rawSynthesis?.next_actions?.questions_to_answer, 4, 180),
       validation_methods: normalizeStringArray(rawSynthesis?.next_actions?.validation_methods, 4, 180)
     },
-    detected_mode: mode
+    detected_mode: SYNTHESIS_MODES_SET.has(rawSynthesis?.detected_mode)
+      ? rawSynthesis.detected_mode
+      : 'exploration'
   };
 }
 
-addApiRoute('get', '/health', (_req, res) => {
-  res.json({
-    ok: true,
-    default_model: DEFAULT_MODEL_NAME,
-    flash_model: FLASH_MODEL_NAME,
-    pro_model: PRO_MODEL_NAME
-  });
-});
+async function interpretSeed(request, env) {
+  const body = await readJsonBody(request);
+  const userInput = normalizeSentence(body?.userInput, 220);
+  if (!userInput) return { status: 400, payload: { error: 'userInput is required' } };
 
-addApiRoute('post', '/interpret-seed', async (req, res) => {
-  try {
-    const userInput = normalizeSentence(req.body?.userInput, 220);
-    if (!userInput) {
-      return res.status(400).json({ error: 'userInput is required' });
-    }
-
-    const prompt = `You are a precision problem-framing assistant.
+  const prompt = `Role: You are a precision problem-framing assistant.
 
 User topic:
 ${JSON.stringify(userInput)}
 
-Do two things:
-1. Rewrite the topic into ONE concrete thinking objective — what the user is really trying to decide or understand.
-2. Write exactly 2 sharp, decision-oriented guiding questions.
+Task:
+1. Rewrite the topic into one concrete thinking objective.
+2. Provide exactly 2 guiding questions that clarify what decision or understanding is needed.
 
-Rules:
-- Do not propose solutions or action plans.
-- Objective under 20 words; each question under 18 words.
-- Questions must be specific to this topic, never generic filler.
+Constraints:
+- Do not generate solutions or action plans.
+- Keep objective under 20 words.
+- Keep each guiding question under 18 words.
+- Questions must be decision-oriented, not generic.
 
-Return JSON only:
+Return JSON only in this schema:
 {
   "objective": "string",
   "guiding_questions": ["string", "string"]
 }`;
 
-    const parsed = await runStructuredPrompt(FLASH_MODEL_NAME, prompt, seedResponseSchema, 0.2);
-    const objective = normalizeSentence(parsed?.objective, 220) || `Clarify the best path for ${userInput}`;
-    const guidingQuestions = normalizeStringArray(parsed?.guiding_questions, 2, 160);
+  const parsed = await runStructuredPrompt(
+    env,
+    env.GEMINI_FLASH_MODEL || 'gemini-3-flash-preview',
+    prompt,
+    seedResponseSchema,
+    0.2
+  );
+  const objective = normalizeSentence(parsed?.objective, 220) || `Clarify the best path for ${userInput}`;
+  const guidingQuestions = normalizeStringArray(parsed?.guiding_questions, 2, 160);
 
-    while (guidingQuestions.length < 2) {
-      const fallbackIndex = guidingQuestions.length + 1;
-      guidingQuestions.push(
-        fallbackIndex === 1
-          ? `What outcome should define success for ${normalizeSentence(userInput, 50)}?`
-          : `What constraints matter most before choosing a direction?`
-      );
-    }
-
-    return res.json({
-      objective,
-      guiding_questions: guidingQuestions
-    });
-  } catch (error) {
-    console.error('Error in interpret-seed:', error);
-    const response = buildApiErrorResponse(error, 'Failed to interpret seed');
-    return res.status(response.status).json(response.payload);
+  while (guidingQuestions.length < 2) {
+    guidingQuestions.push(
+      guidingQuestions.length === 0
+        ? `What outcome should define success for ${normalizeSentence(userInput, 50)}?`
+        : 'What constraints matter most before choosing a direction?'
+    );
   }
-});
 
-addApiRoute('post', '/generate-ideas', async (req, res) => {
-  try {
-    const topic = normalizeSentence(req.body?.topic, 180);
-    const context = req.body?.context || {};
+  return { status: 200, payload: { objective, guiding_questions: guidingQuestions } };
+}
 
-    if (!topic) {
-      return res.status(400).json({ error: 'topic is required' });
-    }
+async function generateIdeas(request, env) {
+  const body = await readJsonBody(request);
+  const topic = normalizeSentence(body?.topic, 180);
+  const context = body?.context || {};
+  if (!topic) return { status: 400, payload: { error: 'topic is required' } };
 
-    const objective = normalizeSentence(context.objective, 220);
-    const guidingQuestions = normalizeStringArray(context.guiding_questions, 3, 160);
-    const parentChain = normalizeStringArray(context.parentChain, 8, 100);
+  const objective = normalizeSentence(context.objective, 220);
+  const guidingQuestions = normalizeStringArray(context.guiding_questions, 3, 160);
+  const parentChain = normalizeStringArray(context.parentChain, 8, 100);
+  const contextSection = [
+    objective ? `Objective: ${objective}` : null,
+    guidingQuestions.length ? `Guiding questions: ${guidingQuestions.join(' | ')}` : null,
+    parentChain.length ? `Current path: ${parentChain.join(' -> ')}` : null
+  ].filter(Boolean).join('\n');
 
-    const contextSection = [
-      objective ? `Objective: ${objective}` : null,
-      guidingQuestions.length ? `Guiding questions: ${guidingQuestions.join(' | ')}` : null,
-      parentChain.length ? `Current path: ${parentChain.join(' -> ')}` : null
-    ].filter(Boolean).join('\n');
-
-    const prompt = `You are an elite brainstorming partner. You expand one idea into sharp, surprising, decision-ready branches.
+  const prompt = `Role: You are generating high-quality next-step brainstorm nodes.
 
 ${contextSection}
 
 Focus node:
 ${JSON.stringify(topic)}
 
-Generate exactly 5 idea nodes that branch from the focus node.
+Task:
+Generate 7 distinct idea nodes that expand the focus node.
 
-Rules:
-- Each idea is ONE crisp, self-contained thought, under 14 words.
-- Make the 5 ideas maximally different from each other — a distinct angle each, no overlap.
-- Be concrete and specific; never vague or generic.
-- Favor ideas that are testable, provocative, or directly decision-relevant.
-- Do not echo wording already used in the current path.
-- Use a mix of types and include at least one "problem", one "method", and one "application".
+Hard constraints:
+- Each idea must be one complete thought and under 15 words.
+- Avoid repeating wording from the current path.
+- Prioritize concrete, testable, or decision-relevant ideas.
+- Mix categories. Include at least one: problem, method, application.
 
-Allowed types: problem, method, application, assumption, opportunity.
+Allowed types:
+- problem
+- method
+- application
+- assumption
+- opportunity
 
-Return a JSON array of exactly 5 objects, each:
-{ "type": "problem | method | application | assumption | opportunity", "content": "string", "expandable": true }`;
-
-    const parsed = await runStructuredPrompt(FLASH_MODEL_NAME, prompt, ideaNodesResponseSchema, 0.7);
-    const ideaNodes = normalizeIdeaNodes(parsed, topic);
-
-    return res.json(ideaNodes);
-  } catch (error) {
-    console.error('Error in generate-ideas:', error);
-    const response = buildApiErrorResponse(error, 'Failed to generate ideas');
-    return res.status(response.status).json(response.payload);
+Return JSON array only:
+[
+  {
+    "type": "problem | method | application | assumption | opportunity",
+    "content": "string",
+    "expandable": true
   }
-});
+]`;
 
-addApiRoute('post', '/cluster-directions', async (req, res) => {
-  try {
-    const objective = normalizeSentence(req.body?.objective, 220);
-    const ideaNodes = normalizeInputIdeas(req.body?.ideaNodes);
+  const parsed = await runStructuredPrompt(
+    env,
+    env.GEMINI_FLASH_MODEL || 'gemini-3-flash-preview',
+    prompt,
+    ideaNodesResponseSchema,
+    0.7
+  );
+  return { status: 200, payload: normalizeIdeaNodes(parsed, topic) };
+}
 
-    if (ideaNodes.length === 0) {
-      return res.json([]);
-    }
+async function clusterDirections(request, env) {
+  const body = await readJsonBody(request);
+  const objective = normalizeSentence(body?.objective, 220);
+  const ideaNodes = normalizeInputIdeas(body?.ideaNodes);
 
-    if (ideaNodes.length === 1) {
-      return res.json([
-        {
-          direction_id: 'D1',
-          title: 'Single Direction',
-          summary: 'Only one explored idea is currently available.',
-          idea_ids: [ideaNodes[0].id]
-        }
-      ]);
-    }
+  if (ideaNodes.length === 0) return { status: 200, payload: [] };
+  if (ideaNodes.length === 1) {
+    return {
+      status: 200,
+      payload: [{
+        direction_id: 'D1',
+        title: 'Single Direction',
+        summary: 'Only one explored idea is currently available.',
+        idea_ids: [ideaNodes[0].id]
+      }]
+    };
+  }
 
-    const nodesText = ideaNodes.map((node) => `- ${node.id} (${node.type}): ${node.content}`).join('\n');
-    const prompt = `Role: You are organizing brainstorm nodes into strategic directions.
+  const nodesText = ideaNodes.map((node) => `- ${node.id} (${node.type}): ${node.content}`).join('\n');
+  const prompt = `Role: You are organizing brainstorm nodes into strategic directions.
 
 Objective:
 ${JSON.stringify(objective || 'Clarify best direction from explored ideas')}
@@ -626,50 +578,49 @@ Return JSON array only:
   }
 ]`;
 
-    const parsed = await runStructuredPrompt(FLASH_MODEL_NAME, prompt, directionsResponseSchema, 0.3);
-    const directions = normalizeDirections(parsed, ideaNodes);
+  const parsed = await runStructuredPrompt(
+    env,
+    env.GEMINI_FLASH_MODEL || 'gemini-3-flash-preview',
+    prompt,
+    directionsResponseSchema,
+    0.3
+  );
+  return { status: 200, payload: normalizeDirections(parsed, ideaNodes) };
+}
 
-    return res.json(directions);
-  } catch (error) {
-    console.error('Error in cluster-directions:', error);
-    const response = buildApiErrorResponse(error, 'Failed to cluster directions');
-    return res.status(response.status).json(response.payload);
+async function synthesize(request, env) {
+  const body = await readJsonBody(request);
+  const objective = normalizeSentence(body?.objective, 240) || 'Clarify the best strategic direction.';
+  const directions = Array.isArray(body?.directions)
+    ? body.directions
+      .map((direction) => ({
+        direction_id: normalizeSentence(direction?.direction_id, 12),
+        title: normalizeSentence(direction?.title, 60),
+        summary: normalizeSentence(direction?.summary, 220),
+        idea_ids: normalizeStringArray(direction?.idea_ids, 20, 80)
+      }))
+      .filter((direction) => direction.direction_id && direction.title)
+    : [];
+  const ideaNodes = normalizeInputIdeas(body?.ideaNodes);
+
+  if (!directions.length) {
+    return { status: 400, payload: { error: 'directions are required before synthesis' } };
   }
-});
 
-addApiRoute('post', '/synthesize', async (req, res) => {
-  try {
-    const objective = normalizeSentence(req.body?.objective, 240) || 'Clarify the best strategic direction.';
-    const directions = Array.isArray(req.body?.directions)
-      ? req.body.directions
-        .map((direction) => ({
-          direction_id: normalizeSentence(direction?.direction_id, 12),
-          title: normalizeSentence(direction?.title, 60),
-          summary: normalizeSentence(direction?.summary, 220),
-          idea_ids: normalizeStringArray(direction?.idea_ids, 20, 80)
-        }))
-        .filter((direction) => direction.direction_id && direction.title)
-      : [];
-    const ideaNodes = normalizeInputIdeas(req.body?.ideaNodes);
-
-    if (!directions.length) {
-      return res.status(400).json({ error: 'directions are required before synthesis' });
-    }
-
-    const ideaMap = new Map(ideaNodes.map((node) => [node.id, node]));
-    const directionsText = directions.map((direction) => {
-      const lines = direction.idea_ids
-        .map((ideaId) => ideaMap.get(ideaId))
-        .filter(Boolean)
-        .map((node) => `- ${node.content} (${node.type})`)
-        .join('\n');
-      return `${direction.direction_id} | ${direction.title}
+  const ideaMap = new Map(ideaNodes.map((node) => [node.id, node]));
+  const directionsText = directions.map((direction) => {
+    const lines = direction.idea_ids
+      .map((ideaId) => ideaMap.get(ideaId))
+      .filter(Boolean)
+      .map((node) => `- ${node.content} (${node.type})`)
+      .join('\n');
+    return `${direction.direction_id} | ${direction.title}
 Summary: ${direction.summary || 'No summary provided.'}
 Ideas:
 ${lines || '- No matched ideas'}`;
-    }).join('\n\n');
+  }).join('\n\n');
 
-    const prompt = `Role: You are a decision-focused synthesis analyst.
+  const prompt = `Role: You are a decision-focused synthesis analyst.
 
 Objective:
 ${JSON.stringify(objective)}
@@ -714,36 +665,81 @@ Return JSON only:
   "detected_mode": "research | startup | product | exploration"
 }`;
 
-    let parsed;
-    try {
-      parsed = await runStructuredPrompt(PRO_MODEL_NAME, prompt, synthesisResponseSchema, 0.4);
-    } catch (proError) {
-      console.warn('Pro model synthesis failed; retrying with flash model:', proError.message);
-      parsed = await runStructuredPrompt(FLASH_MODEL_NAME, prompt, synthesisResponseSchema, 0.4);
-    }
-
-    const normalized = normalizeSynthesis(parsed, directions, objective);
-    return res.json(normalized);
-  } catch (error) {
-    console.error('Error in synthesize:', error);
-    const response = buildApiErrorResponse(error, 'Failed to generate synthesis');
-    return res.status(response.status).json(response.payload);
+  let parsed;
+  try {
+    parsed = await runStructuredPrompt(
+      env,
+      env.GEMINI_PRO_MODEL || 'gemini-3-flash-preview',
+      prompt,
+      synthesisResponseSchema,
+      0.4
+    );
+  } catch {
+    parsed = await runStructuredPrompt(
+      env,
+      env.GEMINI_FLASH_MODEL || 'gemini-3-flash-preview',
+      prompt,
+      synthesisResponseSchema,
+      0.4
+    );
   }
-});
 
-const isDirectRun = process.argv[1]?.endsWith('server.js');
-if (isDirectRun) {
-  app.listen(PORT, () => {
-    console.log(`API server running at http://localhost:${PORT}`);
-    console.log(`Gemini models loaded: flash=${FLASH_MODEL_NAME}, pro=${PRO_MODEL_NAME}`);
-  });
+  return { status: 200, payload: normalizeSynthesis(parsed, directions, objective) };
 }
 
-export default app;
-export {
-  normalizeDirections,
-  normalizeInputIdeas,
-  normalizeSentence,
-  normalizeStringArray,
-  normalizeSynthesis
-};
+function validateRequestToken(request, env, path) {
+  if (!env.API_REQUEST_TOKEN || request.method === 'GET' && path === '/health') return true;
+
+  const authHeader = request.headers.get('Authorization') || '';
+  const bearerToken = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : '';
+  return (request.headers.get('X-ThinkStorm-Token') || bearerToken) === env.API_REQUEST_TOKEN;
+}
+
+export async function onRequest(context) {
+  const { request, env } = context;
+  const url = new URL(request.url);
+  const path = url.pathname.replace(/^\/api\/?/, '/') || '/';
+
+  if (request.method === 'OPTIONS') {
+    return new Response(null, { status: 204, headers: corsHeaders(request, env) });
+  }
+
+  if (!validateRequestToken(request, env, path)) {
+    return jsonResponse(request, env, 401, { error: 'Missing or invalid request token.' });
+  }
+
+  try {
+    if (request.method === 'GET' && path === '/health') {
+      return jsonResponse(request, env, 200, {
+        ok: true,
+        flash_model: env.GEMINI_FLASH_MODEL || 'gemini-3-flash-preview',
+        pro_model: env.GEMINI_PRO_MODEL || 'gemini-3-flash-preview'
+      });
+    }
+
+    const routes = {
+      '/interpret-seed': interpretSeed,
+      '/generate-ideas': generateIdeas,
+      '/cluster-directions': clusterDirections,
+      '/synthesize': synthesize
+    };
+
+    const handler = routes[path];
+    if (request.method !== 'POST' || !handler) {
+      return jsonResponse(request, env, 404, { error: 'API route not found' });
+    }
+
+    const result = await handler(request, env);
+    return jsonResponse(request, env, result.status, result.payload);
+  } catch (error) {
+    const fallback = path === '/interpret-seed'
+      ? 'Failed to interpret seed'
+      : path === '/generate-ideas'
+        ? 'Failed to generate ideas'
+        : path === '/cluster-directions'
+          ? 'Failed to cluster directions'
+          : 'Failed to generate synthesis';
+    const response = buildApiErrorResponse(error, fallback);
+    return jsonResponse(request, env, response.status, response.payload);
+  }
+}

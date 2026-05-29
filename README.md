@@ -1,7 +1,7 @@
 <p align="center">
-  <img src="https://img.shields.io/badge/React-18+-61DAFB?style=for-the-badge&logo=react&logoColor=white" alt="React">
-  <img src="https://img.shields.io/badge/Gemini-2.0-4285F4?style=for-the-badge&logo=google&logoColor=white" alt="Gemini AI">
-  <img src="https://img.shields.io/badge/Vite-5+-646CFF?style=for-the-badge&logo=vite&logoColor=white" alt="Vite">
+  <img src="https://img.shields.io/badge/React-19-61DAFB?style=for-the-badge&logo=react&logoColor=white" alt="React">
+  <img src="https://img.shields.io/badge/Gemini-3%20Flash-4285F4?style=for-the-badge&logo=google&logoColor=white" alt="Gemini AI">
+  <img src="https://img.shields.io/badge/Vite-7-646CFF?style=for-the-badge&logo=vite&logoColor=white" alt="Vite">
   <img src="https://img.shields.io/badge/License-Apache%202.0-green?style=for-the-badge" alt="License">
 </p>
 
@@ -43,7 +43,7 @@ ThinkStorm transforms how you brainstorm by combining an interactive spider-web 
 ## 🚀 Quick Start
 
 ### Prerequisites
-- Node.js 18+
+- Node.js 20+
 - Google Gemini API Key
 
 ### Installation
@@ -67,9 +67,15 @@ Create a `.env` file in the project root and set your Gemini API key:
 ```bash
 GEMINI_API_KEY=your-gemini-api-key-here
 PORT=3001
+GEMINI_FLASH_MODEL=gemini-3-flash-preview
+GEMINI_PRO_MODEL=gemini-3-flash-preview
+ALLOWED_ORIGINS=http://localhost:5173,http://127.0.0.1:5173
 ```
 
-The key is used by `server.js` only and is never exposed to the browser.
+The key is used by `server.js` only and is never exposed to the browser. By default,
+both generation paths use Flash; set `GEMINI_PRO_MODEL` to a Pro model such as
+`gemini-2.5-pro` if your account and quota support it. Use `ALLOWED_ORIGINS` to
+restrict which browser origins can spend API quota through the proxy.
 
 ---
 
@@ -124,7 +130,6 @@ ThinkStorm/
 │   │                            #   - generateSynthesis()
 │   ├── App.jsx
 │   └── main.jsx
-├── Claude.md                    # Brainstorming methodology spec
 ├── package.json
 └── vite.config.js
 ```
@@ -135,11 +140,11 @@ ThinkStorm/
 
 | Technology | Purpose |
 |------------|---------|
-| **React 18** | UI components with hooks |
-| **Vite 5** | Fast dev server & build |
+| **React 19** | UI components with hooks |
+| **Vite 7** | Fast dev server & build |
 | **Motion** | Smooth animations (Framer Motion) |
-| **Google Gemini 2.0 Flash** | AI-powered idea generation |
-| **React Markdown** | Rendering synthesis reports |
+| **Google Gen AI SDK** | Structured Gemini responses via the backend proxy |
+| **Express Rate Limit** | Basic quota protection for API routes |
 
 ---
 
@@ -181,8 +186,56 @@ npm run dev
 # Build for production
 npm run build
 
+# Run unit tests
+npm test
+
 # Preview production build
 npm run preview
+```
+
+---
+
+## Cloudflare Pages Deployment
+
+This repo includes `wrangler.toml` for Cloudflare Pages. It builds the Vite app to
+`dist` and serves `/api/*` through Pages Functions in `functions/api/[[path]].js`.
+
+Cloudflare settings:
+
+| Setting | Value |
+|---------|-------|
+| Build command | `npm run build` |
+| Build output directory | `dist` |
+| Node.js version | `20` or newer |
+
+Set secrets in Cloudflare, not in Git:
+
+```bash
+npx wrangler pages secret put GEMINI_API_KEY --project-name thinkstorm
+```
+
+Do not place `GEMINI_API_KEY` or `CLOUDFLARE_API_TOKEN` in `wrangler.toml`,
+README files, package scripts, or committed env files. For local deploys, use
+`npx wrangler login` or set `CLOUDFLARE_API_TOKEN` only in your terminal/session
+secret store.
+
+Optional secrets:
+
+```bash
+npx wrangler pages secret put API_REQUEST_TOKEN --project-name thinkstorm
+```
+
+Local Cloudflare testing:
+
+```bash
+copy .dev.vars.example .dev.vars
+npm run cloudflare:dev
+```
+
+Production deploy:
+
+```bash
+npm run cloudflare:deploy
 ```
 
 ---

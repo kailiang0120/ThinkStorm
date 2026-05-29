@@ -1,4 +1,6 @@
-import { motion as Motion } from "motion/react";
+import { useState, useRef, useEffect } from "react";
+import { motion as Motion, AnimatePresence } from "motion/react";
+import { SparklesIcon, DownloadIcon, CopyIcon, RefreshIcon, CloseIcon, FileTextIcon, ArrowRightIcon } from "./Icons";
 import "./FinalOutput.css";
 
 export default function FinalOutput({
@@ -6,9 +8,74 @@ export default function FinalOutput({
   seedData,
   directions,
   ideaNodes,
+  round = 1,
   onClose,
-  onReset
+  onReset,
+  onContinue,
+  onExportImage
 }) {
+  const [toast, setToast] = useState(null);
+  const toastTimer = useRef(null);
+  const modalRef = useRef(null);
+
+  const showToast = (message, type = "success") => {
+    setToast({ message, type });
+    if (toastTimer.current) clearTimeout(toastTimer.current);
+    toastTimer.current = setTimeout(() => setToast(null), 2200);
+  };
+
+  useEffect(() => () => {
+    if (toastTimer.current) clearTimeout(toastTimer.current);
+  }, []);
+
+  useEffect(() => {
+    const previouslyFocused = document.activeElement;
+    const focusableSelector = [
+      "button:not(:disabled)",
+      "[href]",
+      "input:not(:disabled)",
+      "select:not(:disabled)",
+      "textarea:not(:disabled)",
+      "[tabindex]:not([tabindex='-1'])"
+    ].join(",");
+
+    const getFocusableElements = () => Array.from(
+      modalRef.current?.querySelectorAll(focusableSelector) || []
+    ).filter((element) => !element.hasAttribute("disabled") && element.offsetParent !== null);
+
+    getFocusableElements()[0]?.focus();
+
+    const handleKeyDown = (event) => {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        onClose();
+        return;
+      }
+
+      if (event.key !== "Tab") return;
+
+      const focusableElements = getFocusableElements();
+      if (!focusableElements.length) return;
+
+      const first = focusableElements[0];
+      const last = focusableElements[focusableElements.length - 1];
+
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first.focus();
+      }
+    };
+
+    document.addEventListener("keydown", handleKeyDown);
+
+    return () => {
+      document.removeEventListener("keydown", handleKeyDown);
+      previouslyFocused?.focus?.();
+    };
+  }, [onClose]);
 
   const handleDownload = () => {
     // Generate markdown report
@@ -23,15 +90,30 @@ export default function FinalOutput({
     a.click();
     document.body.removeChild(a);
     URL.revokeObjectURL(url);
+    showToast("Report downloaded");
   };
 
   const handleCopy = async () => {
     try {
       const markdown = generateMarkdownReport();
       await navigator.clipboard.writeText(markdown);
-      alert("Copied to clipboard!");
+      showToast("Copied to clipboard!");
     } catch {
-      alert("Failed to copy");
+      showToast("Failed to copy", "error");
+    }
+  };
+
+  const handlePrintPdf = () => {
+    window.print();
+    showToast("Print dialog opened");
+  };
+
+  const handleExportImage = async () => {
+    try {
+      await onExportImage?.();
+      showToast("Web image downloaded");
+    } catch {
+      showToast("Failed to export image", "error");
     }
   };
 
@@ -163,6 +245,10 @@ export default function FinalOutput({
     >
       <Motion.div
         className="final-output-container"
+        ref={modalRef}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="final-output-title"
         initial={{ scale: 0.9, y: 50 }}
         animate={{ scale: 1, y: 0 }}
         exit={{ scale: 0.9, y: 50 }}
@@ -170,7 +256,10 @@ export default function FinalOutput({
       >
         <header className="output-header">
           <div className="output-title-section">
-            <h2>📋 Full Synthesis Report</h2>
+            <h2 id="final-output-title">
+              <span className="output-title-icon"><SparklesIcon size={18} /></span>
+              Synthesis Report
+            </h2>
             <div className="output-meta">
               <span className="topic-badge">{seedData?.userInput}</span>
               <span className={`mode-tag ${synthesis?.detected_mode}`}>
@@ -178,13 +267,15 @@ export default function FinalOutput({
               </span>
             </div>
           </div>
-          <button className="close-btn" onClick={onClose}>×</button>
+          <button className="close-btn" onClick={onClose} aria-label="Close synthesis report">
+            <CloseIcon size={18} />
+          </button>
         </header>
 
         <div className="output-content">
           {/* Thinking Objective */}
           <section className="report-section">
-            <h3>🎯 Thinking Objective</h3>
+            <h3>Thinking Objective</h3>
             <p className="objective-text">{seedData?.objective}</p>
             {seedData?.guiding_questions?.length > 0 && (
               <div className="guiding-questions">
@@ -200,7 +291,7 @@ export default function FinalOutput({
 
           {/* Problem Statement */}
           <section className="report-section">
-            <h3>📋 Problem Statement</h3>
+            <h3>Problem Statement</h3>
             <p className="problem-text">{synthesis?.problem_statement?.interpreted_goal}</p>
             {synthesis?.problem_statement?.key_assumptions?.length > 0 && (
               <div className="assumptions-list">
@@ -216,7 +307,7 @@ export default function FinalOutput({
 
           {/* Directions Summary */}
           <section className="report-section">
-            <h3>📂 Directions Explored</h3>
+            <h3>Directions Explored</h3>
             <div className="directions-summary">
               {directions?.map(dir => (
                 <div key={dir.direction_id} className="direction-summary-card">
@@ -243,7 +334,7 @@ export default function FinalOutput({
 
           {/* Full Analysis */}
           <section className="report-section">
-            <h3>📊 Detailed Analysis</h3>
+            <h3>Detailed Analysis</h3>
             <div className="full-analysis">
               {synthesis?.directions_analysis?.map(da => (
                 <div key={da.direction_id} className="analysis-block">
@@ -278,7 +369,7 @@ export default function FinalOutput({
 
           {/* Comparison */}
           <section className="report-section">
-            <h3>⚖️ Direction Comparison</h3>
+            <h3>Direction Comparison</h3>
             <div className="comparison-summary">
               <div className="comp-block promising">
                 <span className="comp-block-label">Most Promising</span>
@@ -305,7 +396,7 @@ export default function FinalOutput({
 
           {/* Next Actions */}
           <section className="report-section">
-            <h3>🚀 Recommended Next Actions</h3>
+            <h3>Recommended Next Actions</h3>
             <div className="next-actions-summary">
               {synthesis?.next_actions?.immediate_steps?.length > 0 && (
                 <div className="action-block">
@@ -342,16 +433,40 @@ export default function FinalOutput({
         </div>
 
         <footer className="output-footer">
+          <button className="output-btn image" onClick={handleExportImage}>
+            <DownloadIcon size={16} /> Web image
+          </button>
           <button className="output-btn download" onClick={handleDownload}>
-            📥 Download Markdown
+            <FileTextIcon size={16} /> Markdown
+          </button>
+          <button className="output-btn pdf" onClick={handlePrintPdf}>
+            <FileTextIcon size={16} /> PDF
           </button>
           <button className="output-btn copy" onClick={handleCopy}>
-            📋 Copy to Clipboard
+            <CopyIcon size={16} /> Copy
           </button>
-          <button className="output-btn new" onClick={onReset}>
-            🔄 Start New Brainstorm
+          <button className="output-btn ghost" onClick={onReset}>
+            <RefreshIcon size={16} /> Start over
           </button>
+          {onContinue && (
+            <button className="output-btn new" onClick={onContinue}>
+              Grow web {round + 1} <ArrowRightIcon size={16} />
+            </button>
+          )}
         </footer>
+
+        <AnimatePresence>
+          {toast && (
+            <Motion.div
+              className={`output-toast ${toast.type}`}
+              initial={{ opacity: 0, y: 20, x: "-50%" }}
+              animate={{ opacity: 1, y: 0, x: "-50%" }}
+              exit={{ opacity: 0, y: 20, x: "-50%" }}
+            >
+              {toast.type === "error" ? "⚠️" : "✓"} {toast.message}
+            </Motion.div>
+          )}
+        </AnimatePresence>
       </Motion.div>
     </Motion.div>
   );

@@ -5,98 +5,150 @@
 }
 
 .think-node {
+  --node-color: var(--c-opportunity);
   position: relative;
-  min-width: 140px;
-  max-width: 200px;
-  padding: 18px 24px;
-  background: linear-gradient(135deg, rgba(30, 30, 50, 0.95), rgba(20, 20, 40, 0.95));
-  border: 2px solid rgba(139, 92, 246, 0.5);
-  border-radius: 16px;
-  color: #f8fafc;
+  width: max-content;
+  min-width: 200px;
+  max-width: 300px;
+  padding: 15px 18px 16px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-left: 4px solid var(--node-color);
+  border-radius: var(--radius-sm);
+  color: var(--text);
   font-size: 0.9rem;
   font-weight: 500;
-  text-align: center;
+  text-align: left;
   cursor: pointer;
-  backdrop-filter: blur(10px);
-  transition: all 0.3s ease;
-  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
+  box-shadow: var(--shadow-md);
+  transition: box-shadow 0.25s ease, border-color 0.25s ease, background 0.25s ease;
 }
 
-.think-node.root {
-  min-width: 180px;
-  padding: 22px 28px;
-  background: linear-gradient(135deg, rgba(139, 92, 246, 0.3), rgba(6, 182, 212, 0.3));
-  border-color: #8b5cf6;
-  font-size: 1rem;
-  font-weight: 600;
-  box-shadow: 0 0 30px rgba(139, 92, 246, 0.4);
+.think-node:hover {
+  box-shadow: var(--shadow-lg);
+  border-left-color: var(--node-color);
 }
 
-.think-node.active {
-  border-color: #8b5cf6;
-  box-shadow: 0 0 25px rgba(139, 92, 246, 0.5);
-}
-
-.think-node.in-chain {
-  background: linear-gradient(135deg, rgba(16, 185, 129, 0.25), rgba(6, 182, 212, 0.25));
-  border-color: #10b981;
-  box-shadow: 0 0 25px rgba(16, 185, 129, 0.4);
-}
-
-.think-node.in-chain:hover {
-  cursor: default;
-}
-
-/* Type Indicator */
-.node-type-indicator {
-  position: absolute;
-  top: -10px;
-  left: -10px;
-  width: 24px;
-  height: 24px;
-  display: flex;
+/* Category label chip */
+.node-category {
+  display: inline-flex;
   align-items: center;
-  justify-content: center;
-  font-size: 0.8rem;
-  background: rgba(0, 0, 0, 0.6);
-  border-radius: 50%;
-  border: 2px solid rgba(255, 255, 255, 0.2);
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+  gap: 5px;
+  font-size: 0.62rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: color-mix(in srgb, var(--node-color) 68%, #0f172a);
+  margin-bottom: 7px;
+}
+
+.node-category svg {
+  flex-shrink: 0;
 }
 
 .node-text {
   display: block;
-  line-height: 1.4;
+  line-height: 1.45;
+  color: var(--text);
   word-wrap: break-word;
 }
 
-/* Pulse ring for active node */
-.pulse-ring {
+/* Root node — the focal point */
+.think-node.root {
+  min-width: 230px;
+  padding: 16px 20px 17px;
+  background: var(--primary-grad);
+  border: none;
+  border-radius: var(--radius);
+  color: #fff;
+  text-align: center;
+  box-shadow: var(--shadow-primary);
+}
+
+.think-node.root .node-text {
+  color: #fff;
+  font-size: 1rem;
+  font-weight: 600;
+}
+
+.node-root-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 0.62rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: rgba(255, 255, 255, 0.92);
+  background: rgba(255, 255, 255, 0.18);
+  padding: 4px 9px;
+  border-radius: 999px;
+  margin-bottom: 9px;
+}
+
+/* Active node */
+.think-node.active:not(.root) {
+  border-color: var(--node-color);
+  box-shadow: var(--shadow-lg), 0 0 0 3px color-mix(in srgb, var(--node-color) 28%, transparent);
+}
+
+.think-node.root.active {
+  box-shadow: var(--shadow-primary), 0 0 0 4px rgba(37, 117, 230, 0.25);
+}
+
+/* Explored (in-chain) node */
+.think-node.in-chain:not(.root) {
+  background: color-mix(in srgb, var(--node-color) 9%, var(--surface));
+  border-left-width: 4px;
+  border-color: color-mix(in srgb, var(--node-color) 30%, var(--border));
+  box-shadow: var(--shadow-md), 0 0 0 1px color-mix(in srgb, var(--node-color) 22%, transparent);
+}
+
+.think-node.in-chain:hover {
+  cursor: pointer;
+}
+
+/* "Expandable" affordance on unexpanded idea nodes */
+.node-expand-hint {
   position: absolute;
+  right: -9px;
   top: 50%;
-  left: 50%;
-  transform: translate(-50%, -50%);
-  width: calc(100% + 20px);
-  height: calc(100% + 20px);
-  border-radius: 20px;
-  border: 2px solid rgba(139, 92, 246, 0.5);
-  animation: pulse 2s ease-out infinite;
+  transform: translateY(-50%);
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--surface);
+  color: var(--node-color);
+  border: 1.5px solid color-mix(in srgb, var(--node-color) 40%, var(--border));
+  box-shadow: var(--shadow-sm);
+  opacity: 0;
+  transition: opacity 0.2s ease, transform 0.2s ease;
+}
+
+.think-node:hover .node-expand-hint {
+  opacity: 1;
+}
+
+/* Pulse ring for active node */
+.node-ring {
+  position: absolute;
+  inset: -6px;
+  border-radius: calc(var(--radius-sm) + 6px);
+  border: 2px solid color-mix(in srgb, var(--node-color) 55%, transparent);
+  animation: node-pulse 2.4s ease-out infinite;
   pointer-events: none;
 }
 
-@keyframes pulse {
-  0% {
-    transform: translate(-50%, -50%) scale(1);
-    opacity: 1;
-  }
-
-  100% {
-    transform: translate(-50%, -50%) scale(1.2);
-    opacity: 0;
-  }
+.think-node.root .node-ring {
+  inset: -7px;
+  border-radius: calc(var(--radius) + 7px);
+  border-color: rgba(37, 117, 230, 0.5);
 }
 
-/* Hover states based on type */
-.think-node:not(.in-chain):not(.root):hover {
-  transform: translateY(-2px);
+@keyframes node-pulse {
+  0% { transform: scale(1); opacity: 0.9; }
+  100% { transform: scale(1.14); opacity: 0; }
 }

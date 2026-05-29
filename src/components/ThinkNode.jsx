@@ -1,14 +1,13 @@
 import { motion as Motion } from "motion/react";
+import { CategoryIcon, ZapIcon, PlusIcon } from "./Icons";
 import "./ThinkNode.css";
 
-// Type labels for display
 const TYPE_LABELS = {
-  problem: "🔴",
-  method: "🔵",
-  application: "🟢",
-  assumption: "🟡",
-  opportunity: "🟣",
-  root: "⚡"
+  problem: "Problem",
+  method: "Method",
+  application: "Application",
+  assumption: "Assumption",
+  opportunity: "Opportunity"
 };
 
 export default function ThinkNode({
@@ -17,12 +16,19 @@ export default function ThinkNode({
   isRoot = false,
   isActive = false,
   isInChain = false,
+  isExpanded = false,
   onClick,
   position,
   typeColor,
   delay = 0
 }) {
-  const typeIndicator = TYPE_LABELS[nodeType] || TYPE_LABELS.opportunity;
+  const label = TYPE_LABELS[nodeType] || TYPE_LABELS.opportunity;
+  const showExpandHint = !isRoot && !isExpanded;
+
+  // Expose the category color to CSS so accents/tints stay in sync.
+  const colorVars = !isRoot
+    ? { "--node-color": typeColor || "var(--c-opportunity)" }
+    : undefined;
 
   return (
     <div
@@ -31,39 +37,45 @@ export default function ThinkNode({
     >
       <Motion.div
         className={`think-node ${isRoot ? "root" : ""} ${isActive ? "active" : ""} ${isInChain ? "in-chain" : ""}`}
+        style={colorVars}
         initial={{ scale: 0, opacity: 0 }}
         animate={{ scale: 1, opacity: 1 }}
         exit={{ scale: 0, opacity: 0 }}
-        transition={{
-          type: "spring",
-          stiffness: 300,
-          damping: 25,
-          delay
-        }}
-        whileHover={{
-          scale: 1.08,
-          boxShadow: isInChain
-            ? "0 0 40px rgba(16, 185, 129, 0.5)"
-            : typeColor
-              ? `0 0 40px ${typeColor}40`
-              : "0 0 40px rgba(139, 92, 246, 0.5)"
-        }}
-        whileTap={{ scale: 0.95 }}
+        transition={{ type: "spring", stiffness: 300, damping: 25, delay }}
+        whileHover={{ y: -4 }}
+        whileTap={{ scale: 0.97 }}
         onClick={onClick}
-        style={typeColor && !isRoot && !isInChain ? {
-          borderColor: typeColor,
-          boxShadow: `0 0 20px ${typeColor}30`
-        } : {}}
+        role="button"
+        tabIndex={0}
+        aria-label={`${isRoot ? "Root topic" : label}: ${topic}`}
+        onKeyDown={(e) => {
+          if (e.key === "Enter" || e.key === " ") {
+            e.preventDefault();
+            onClick?.();
+          }
+        }}
       >
-        {/* Type Indicator */}
-        {!isRoot && (
-          <span className="node-type-indicator" title={nodeType}>
-            {typeIndicator}
+        {isRoot ? (
+          <span className="node-root-badge">
+            <ZapIcon size={15} />
+            Topic
+          </span>
+        ) : (
+          <span className="node-category">
+            <CategoryIcon type={nodeType} size={13} />
+            {label}
           </span>
         )}
 
         <span className="node-text">{topic}</span>
-        {isActive && <div className="pulse-ring" />}
+
+        {showExpandHint && (
+          <span className="node-expand-hint" aria-hidden="true">
+            <PlusIcon size={13} />
+          </span>
+        )}
+
+        {isActive && <span className="node-ring" aria-hidden="true" />}
       </Motion.div>
     </div>
   );
