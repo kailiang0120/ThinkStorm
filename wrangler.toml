@@ -1,0 +1,8 @@
+name = "thinkstorm"
+compatibility_date = "2026-05-29"
+pages_build_output_dir = "dist"
+compatibility_flags = ["nodejs_compat"]
+
+[vars]
+GEMINI_FLASH_MODEL = "gemini-3-flash-preview"
+GEMINI_PRO_MODEL = "gemini-3-flash-preview"

@@ -11,8 +11,8 @@
     "lint": "eslint .",
     "test": "vitest run",
     "preview": "vite preview",
-    "cloudflare:dev": "npm run build && wrangler dev",
-    "cloudflare:deploy": "npm run build && wrangler deploy",
+    "cloudflare:dev": "npm run build && wrangler pages dev dist --functions-directory functions",
+    "cloudflare:deploy": "npm run build && wrangler pages deploy dist --project-name thinkstorm",
     "deploy": "npm run cloudflare:deploy"
   },
   "dependencies": {
@@ -26,7 +26,6 @@
     "react-dom": "^19.2.0"
   },
   "devDependencies": {
-    "@cloudflare/vite-plugin": "^1.39.0",
     "@eslint/js": "^9.39.1",
     "@types/react": "^19.2.5",
     "@types/react-dom": "^19.2.3",
