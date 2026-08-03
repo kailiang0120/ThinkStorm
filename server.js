@@ -394,7 +394,7 @@ function normalizeDirections(rawDirections, ideaNodes) {
   }));
 }
 
-function normalizeSynthesis(rawSynthesis, directions, objective) {
+function normalizeSynthesis(rawSynthesis, directions, objective, evaluation = null) {
   const directionIds = directions.map((direction) => direction.direction_id);
   const directionIdSet = new Set(directionIds);
 
@@ -436,9 +436,13 @@ function normalizeSynthesis(rawSynthesis, directions, objective) {
   const fallbackMostPromising = directionsAnalysis.find((item) => item.potential === 'high')?.direction_id
     || directionIds[0]
     || 'D1';
-  const mostPromising = directionIdSet.has(rawSynthesis?.comparison?.most_promising)
+  const selectedDirectionId = directionIdSet.has(evaluation?.selected_direction_id)
+    ? evaluation.selected_direction_id
+    : null;
+  const mostPromising = selectedDirectionId
+    || (directionIdSet.has(rawSynthesis?.comparison?.most_promising)
     ? rawSynthesis.comparison.most_promising
-    : fallbackMostPromising;
+    : fallbackMostPromising);
 
   const mode = SYNTHESIS_MODES_SET.has(rawSynthesis?.detected_mode)
     ? rawSynthesis.detected_mode
@@ -646,11 +650,35 @@ addApiRoute('post', '/synthesize', async (req, res) => {
           direction_id: normalizeSentence(direction?.direction_id, 12),
           title: normalizeSentence(direction?.title, 60),
           summary: normalizeSentence(direction?.summary, 220),
-          idea_ids: normalizeStringArray(direction?.idea_ids, 20, 80)
+          idea_ids: normalizeStringArray(direction?.idea_ids, 80, 80)
         }))
         .filter((direction) => direction.direction_id && direction.title)
       : [];
     const ideaNodes = normalizeInputIdeas(req.body?.ideaNodes);
+    const rawEvaluation = req.body?.evaluation && typeof req.body.evaluation === 'object' ? req.body.evaluation : {};
+    const evaluation = {
+      selected_direction_id: normalizeSentence(rawEvaluation.selected_direction_id, 12),
+      criteria: Array.isArray(rawEvaluation.criteria)
+        ? rawEvaluation.criteria
+          .map((criterion) => ({
+            label: normalizeSentence(criterion?.label, 80),
+            weight: Math.min(5, Math.max(1, Number(criterion?.weight) || 1))
+          }))
+          .filter((criterion) => criterion.label)
+          .slice(0, 8)
+        : [],
+      scores: rawEvaluation.scores && typeof rawEvaluation.scores === 'object'
+        ? Object.fromEntries(Object.entries(rawEvaluation.scores).slice(0, 12).map(([directionId, values]) => [
+          normalizeSentence(directionId, 12),
+          values && typeof values === 'object'
+            ? Object.fromEntries(Object.entries(values).slice(0, 12).map(([criterionId, score]) => [
+              normalizeSentence(criterionId, 40),
+              Math.min(5, Math.max(1, Number(score) || 1))
+            ]))
+            : {}
+        ]))
+        : {}
+    };
 
     if (!directions.length) {
       return res.status(400).json({ error: 'directions are required before synthesis' });
@@ -677,11 +705,15 @@ ${JSON.stringify(objective)}
 Directions:
 ${directionsText}
 
+User evaluation:
+${JSON.stringify(evaluation)}
+
 Task:
 1. Restate the core goal.
 2. Analyze every direction with value, risks, unknowns, and potential.
 3. Compare directions and select most promising.
 4. Propose concrete next actions.
+5. Treat the user's selected direction and weighted criteria as the decision context. Analyze alternatives honestly, but keep the selected direction as the recommended direction unless the user selection is clearly unsupported.
 
 Potential must be one of: high, medium, low.
 Detected mode must be one of: research, startup, product, exploration.
@@ -722,7 +754,7 @@ Return JSON only:
       parsed = await runStructuredPrompt(FLASH_MODEL_NAME, prompt, synthesisResponseSchema, 0.4);
     }
 
-    const normalized = normalizeSynthesis(parsed, directions, objective);
+    const normalized = normalizeSynthesis(parsed, directions, objective, evaluation);
     return res.json(normalized);
   } catch (error) {
     console.error('Error in synthesize:', error);

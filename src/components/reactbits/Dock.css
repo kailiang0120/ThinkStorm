@@ -1,0 +1,120 @@
+.dock-panel {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 8px;
+  background: var(--glass-strong);
+  border: 1px solid var(--border);
+  border-radius: 20px;
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  box-shadow: var(--shadow-lg);
+}
+
+.dock-panel.vertical { flex-direction: column; }
+.dock-panel.horizontal { flex-direction: row; }
+
+.dock-item {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid transparent;
+  border-radius: 13px;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  flex-shrink: 0;
+  font-size: 0.7rem;
+  font-weight: 700;
+  padding: 0;
+  transition: background 0.18s ease, color 0.18s ease, box-shadow 0.18s ease;
+}
+
+.dock-item:hover:not(.is-disabled) {
+  background: var(--primary-soft);
+  color: var(--primary-700);
+}
+
+.dock-item.is-disabled { opacity: 0.4; cursor: not-allowed; }
+
+.dock-item-icon {
+  display: grid;
+  place-items: center;
+  line-height: 0;
+}
+
+.dock-item.zoom-level { color: var(--text); letter-spacing: -0.02em; }
+
+.dock-item.structure:hover:not(.is-disabled) {
+  background: rgba(245, 158, 11, 0.16);
+  color: #b45309;
+}
+
+.dock-item.reset:hover:not(.is-disabled) {
+  background: rgba(244, 63, 94, 0.14);
+  color: #e11d48;
+}
+
+.dock-item.primary {
+  background: var(--primary-grad);
+  color: #fff;
+  box-shadow: 0 5px 14px rgba(37, 117, 230, 0.35);
+}
+
+.dock-item.primary:hover:not(.is-disabled) {
+  color: #fff;
+  box-shadow: 0 8px 20px rgba(37, 117, 230, 0.5);
+}
+
+/* Proximity label — replaces the old CSS-only ::after tooltip */
+.dock-item-label {
+  position: absolute;
+  padding: 6px 10px;
+  border-radius: 8px;
+  background: #0f172a;
+  color: #fff;
+  font-size: 0.74rem;
+  font-weight: 600;
+  letter-spacing: 0;
+  white-space: nowrap;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.15s ease, transform 0.15s ease;
+  box-shadow: var(--shadow-md);
+  z-index: 5;
+}
+
+.dock-panel.vertical .dock-item-label {
+  left: calc(100% + 12px);
+  top: 50%;
+  transform: translateY(-50%) translateX(-4px);
+}
+
+.dock-panel.vertical .dock-item-label.visible {
+  opacity: 1;
+  transform: translateY(-50%) translateX(0);
+}
+
+.dock-panel.horizontal .dock-item-label {
+  bottom: calc(100% + 12px);
+  left: 50%;
+  transform: translateX(-50%) translateY(4px);
+}
+
+.dock-panel.horizontal .dock-item-label.visible {
+  opacity: 1;
+  transform: translateX(-50%) translateY(0);
+}
+
+.dock-panel .dock-divider {
+  background: var(--border);
+  flex-shrink: 0;
+}
+
+.dock-panel.vertical .dock-divider { width: 60%; height: 1px; margin: 4px 0; }
+.dock-panel.horizontal .dock-divider { width: 1px; height: 26px; margin: 0 3px; }
+
+@media (prefers-reduced-motion: reduce) {
+  .dock-item, .dock-item-label { transition: none; }
+}

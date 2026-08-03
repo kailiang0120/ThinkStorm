@@ -1,0 +1,99 @@
+.stage-stepper {
+  display: flex;
+  align-items: center;
+  gap: 0;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.stepper-step {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  flex-shrink: 0;
+}
+
+.stepper-marker {
+  display: grid;
+  place-items: center;
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  font-size: 0.72rem;
+  font-weight: 700;
+  background: var(--surface-3);
+  color: var(--text-soft);
+  border: 1.5px solid transparent;
+  flex-shrink: 0;
+  transition: background 0.3s ease, color 0.3s ease, border-color 0.3s ease;
+}
+
+.stepper-step.complete .stepper-marker {
+  background: var(--primary-soft);
+  color: var(--primary-700);
+  border-color: rgba(37, 117, 230, 0.3);
+}
+
+.stepper-step.current .stepper-marker {
+  background: var(--primary-grad);
+  color: #fff;
+  box-shadow: 0 4px 12px rgba(37, 117, 230, 0.4);
+}
+
+.stepper-label {
+  font-size: 0.74rem;
+  font-weight: 600;
+  color: var(--text-soft);
+  white-space: nowrap;
+  transition: color 0.3s ease;
+}
+
+.stepper-step.complete .stepper-label { color: var(--text-muted); }
+.stepper-step.current .stepper-label { color: var(--primary-700); }
+
+.stepper-connector {
+  position: relative;
+  display: block;
+  width: 22px;
+  height: 2px;
+  margin: 0 8px;
+  border-radius: 2px;
+  background: var(--border-strong);
+  overflow: hidden;
+  flex-shrink: 0;
+}
+
+.stepper-connector-fill {
+  position: absolute;
+  inset: 0;
+  transform-origin: left center;
+  border-radius: 2px;
+  background: var(--primary-grad);
+}
+
+/* Too narrow for four labels: keep the current step named — that is the one
+   piece of the stepper that actually has to be readable — and let the rest
+   fall back to numbered markers. */
+@media (max-width: 1180px) {
+  .stepper-label { display: none; }
+  .stepper-step.current .stepper-label { display: inline; }
+  .stepper-connector { width: 16px; margin: 0 4px; }
+}
+
+/* Below this even one label crowds the chain, so markers only. */
+@media (max-width: 900px) {
+  .stepper-step.current .stepper-label { display: none; }
+}
+
+/* Stacked header: the current marker's 12px glow bled onto the chain pills
+   sitting directly underneath, which read as the rows overlapping. */
+@media (max-width: 768px) {
+  .stepper-marker { width: 24px; height: 24px; font-size: 0.68rem; }
+  .stepper-step.current .stepper-marker { box-shadow: 0 2px 6px rgba(37, 117, 230, 0.3); }
+  .stepper-connector { width: 14px; margin: 0 3px; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .stepper-marker, .stepper-label { transition: none; }
+}

@@ -9,6 +9,55 @@ const LABEL_H = 22;
 const PAD_V = 16;
 const MARGIN = 90;
 const FONT_STACK = "'Outfit', 'Segoe UI', system-ui, -apple-system, sans-serif";
+const GOOGLE_FONT_CSS = "https://fonts.googleapis.com/css2?family=Outfit:wght@500;700&display=swap";
+
+// Rasterizing an SVG happens in an isolated image context that cannot reach the
+// page's webfonts, so 'Outfit' silently fell back to a system font in every
+// export. Inline the woff2 as a data URI instead. Fetched once per session.
+let fontFacePromise = null;
+
+async function toBase64(buffer) {
+  const bytes = new Uint8Array(buffer);
+  let binary = "";
+  const CHUNK = 0x8000;
+  for (let i = 0; i < bytes.length; i += CHUNK) {
+    binary += String.fromCharCode.apply(null, bytes.subarray(i, i + CHUNK));
+  }
+  return btoa(binary);
+}
+
+async function buildFontFaceCss() {
+  const css = await fetch(GOOGLE_FONT_CSS).then((r) => (r.ok ? r.text() : ""));
+  const blocks = css.match(/@font-face\s*\{[^}]*\}/g) || [];
+
+  // Google returns one block per subset; the latin subset is emitted last for
+  // each weight, so keeping the last match per weight gives us basic latin.
+  const byWeight = new Map();
+  blocks.forEach((block) => {
+    const weight = block.match(/font-weight:\s*(\d+)/)?.[1];
+    const url = block.match(/url\((https:\/\/[^)]+\.woff2)\)/)?.[1];
+    if (weight && url) byWeight.set(weight, url);
+  });
+
+  const faces = await Promise.all(
+    Array.from(byWeight.entries()).map(async ([weight, url]) => {
+      const buffer = await fetch(url).then((r) => (r.ok ? r.arrayBuffer() : null));
+      if (!buffer) return "";
+      const base64 = await toBase64(buffer);
+      return `@font-face{font-family:'Outfit';font-style:normal;font-weight:${weight};src:url(data:font/woff2;base64,${base64}) format('woff2');}`;
+    })
+  );
+
+  return faces.filter(Boolean).join("");
+}
+
+/** Resolve the inline @font-face CSS, or an empty string if the fetch fails. */
+async function getFontFaceCss() {
+  if (!fontFacePromise) {
+    fontFacePromise = buildFontFaceCss().catch(() => "");
+  }
+  return fontFacePromise;
+}
 
 const TYPE_LABELS = {
   problem: "PROBLEM",
@@ -65,7 +114,7 @@ function curvePath(x1, y1, x2, y2) {
  * @param {Map} layout   Map<id, {x, y}>
  * @param {Object} typeColors
  */
-export function buildWebSvg(nodes, layout, typeColors, title = "ThinkStorm") {
+export function buildWebSvg(nodes, layout, typeColors, title = "ThinkStorm", fontFaceCss = "") {
   const boxes = new Map();
   nodes.forEach((n) => boxes.set(n.id, nodeBox(n)));
 
@@ -162,6 +211,7 @@ export function buildWebSvg(nodes, layout, typeColors, title = "ThinkStorm") {
     svg:
 `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}">
   <defs>
+    ${fontFaceCss ? `<style type="text/css">${fontFaceCss}</style>` : ""}
     <linearGradient id="rootGrad" x1="0" y1="0" x2="1" y2="1">
       <stop offset="0%" stop-color="#2575e6"/>
       <stop offset="55%" stop-color="#1f9ed6"/>
@@ -180,11 +230,37 @@ export function buildWebSvg(nodes, layout, typeColors, title = "ThinkStorm") {
   };
 }
 
+/**
+ * Trigger a browser download for a Blob.
+ *
+ * Revoking the object URL synchronously after `click()` races the download in
+ * Firefox and can cancel it outright, so the revoke is deferred a tick.
+ */
+export function triggerDownload(blob, filename) {
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  a.rel = "noopener";
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  setTimeout(() => URL.revokeObjectURL(url), 10_000);
+}
+
 /** Rasterize an SVG string to PNG and trigger a download. */
 export function downloadWebImage(svg, width, height, filename = "thinkstorm-web") {
   return new Promise((resolve, reject) => {
     const scale = 2;
-    const svg64 = `data:image/svg+xml;base64,${btoa(unescape(encodeURIComponent(svg)))}`;
+    // `unescape` is deprecated; encode the UTF-8 bytes explicitly instead.
+    const utf8 = new TextEncoder().encode(svg);
+    let binary = "";
+    const CHUNK = 0x8000;
+    for (let i = 0; i < utf8.length; i += CHUNK) {
+      binary += String.fromCharCode.apply(null, utf8.subarray(i, i + CHUNK));
+    }
+    const svg64 = `data:image/svg+xml;base64,${btoa(binary)}`;
+
     const img = new Image();
     img.onload = () => {
       try {
@@ -199,14 +275,7 @@ export function downloadWebImage(svg, width, height, filename = "thinkstorm-web"
             reject(new Error("Failed to render image"));
             return;
           }
-          const url = URL.createObjectURL(blob);
-          const a = document.createElement("a");
-          a.href = url;
-          a.download = `${filename}.png`;
-          document.body.appendChild(a);
-          a.click();
-          document.body.removeChild(a);
-          URL.revokeObjectURL(url);
+          triggerDownload(blob, `${filename}.png`);
           resolve();
         }, "image/png");
       } catch (err) {
@@ -216,4 +285,11 @@ export function downloadWebImage(svg, width, height, filename = "thinkstorm-web"
     img.onerror = () => reject(new Error("Failed to load SVG for export"));
     img.src = svg64;
   });
+}
+
+/** Build + rasterize + download in one call, with the webfont inlined. */
+export async function exportWebImage(nodes, layout, typeColors, title, filename) {
+  const fontFaceCss = await getFontFaceCss();
+  const { svg, width, height } = buildWebSvg(nodes, layout, typeColors, title, fontFaceCss);
+  await downloadWebImage(svg, width, height, filename);
 }

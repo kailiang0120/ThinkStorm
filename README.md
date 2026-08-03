@@ -24,13 +24,15 @@ ThinkStorm transforms how you brainstorm by combining an interactive spider-web 
 ### 🧠 AI-Powered Idea Generation
 - **Typed Ideas**: Each idea is categorized (🔴 Problem, 🔵 Method, 🟢 Application, 🟡 Assumption, 🟣 Opportunity)
 - **Contextual Expansion**: AI considers your exploration path when generating new ideas
-- **Regenerate**: Not satisfied? Regenerate subtopics with one click
+- **Human + AI capture**: Add, edit, shortlist, park, and delete your own ideas before asking AI for fresh angles
+- **Reversible exploration**: Alternative branches and workflow changes can be undone
 
-### 📊 Structured 4-Stage Brainstorming
-1. **Seed** → Enter your topic and let AI interpret your thinking objective
-2. **Expand** → Click nodes to explore different directions (spider-web exploration)
-3. **Structure** → AI clusters your explored ideas into coherent directions
-4. **Synthesize** → Get a comprehensive analysis with recommendations and next actions
+### 📊 Structured Brainstorming Workflow
+1. **Seed** → Enter a topic, then review and edit the AI-framed objective and guiding questions
+2. **Expand** → Capture human ideas, ask AI for optional angles, and curate the web
+3. **Structure** → Review, rename, and rearrange AI-proposed directions
+4. **Synthesize** → Select a direction, define evaluation criteria, and generate a decision report
+5. **Commit** → Turn the report into a small experiment with an owner, due date, and success metric
 
 ### 🎨 Premium Visual Design
 - **Cosmic Background**: Animated starfield with nebula effects
@@ -100,12 +102,13 @@ restrict which browser origins can spend API quota through the proxy.
 ### Example Session
 
 1. **Enter**: "AI in healthcare"
-2. **AI generates**: Root node + 5-7 typed idea nodes (spider-web pattern)
-3. **Click** a node like "AI-powered diagnostics" to explore that direction
-4. **New nodes** appear around your selection, building the web
-5. **Continue exploring** until satisfied with your thinking path
-6. **Structure**: AI identifies key directions from your exploration
-7. **Synthesize**: Get a comprehensive report with problem statement, analysis, and next actions
+2. **Frame**: Edit the objective and guiding questions until they match the decision you need to make
+3. **Capture**: Add your own concerns, opportunities, and ideas to the root topic
+4. **Diversify**: Ask AI for fresh angles or expand a selected node
+5. **Curate**: Edit ideas, shortlist the strongest ones, and park distractions
+6. **Structure**: Review and adjust the proposed directions
+7. **Evaluate**: Choose a direction and define what “best” means for this session
+8. **Commit**: Generate the report and record the first experiment to run
 
 ---
 
@@ -172,6 +175,7 @@ The synthesis report includes:
 - **📂 Directions Analysis**: Each direction with value, risks, and unknowns
 - **📊 Comparison**: Most promising direction and combination potential
 - **✅ Next Actions**: Immediate steps, questions to answer, validation methods
+- **🧪 Experiment commitment**: First step, success metric, owner, due date, and completion status
 
 Export as Markdown or copy to clipboard!
 

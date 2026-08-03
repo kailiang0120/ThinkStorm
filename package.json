@@ -22,6 +22,7 @@
     "express": "^4.21.0",
     "express-rate-limit": "^8.5.2",
     "motion": "^12.26.2",
+    "ogl": "^1.0.11",
     "react": "^19.2.0",
     "react-dom": "^19.2.0"
   },
