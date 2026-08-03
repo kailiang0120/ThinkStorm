@@ -83,6 +83,16 @@ const IDEA_TYPES = ['problem', 'method', 'application', 'assumption', 'opportuni
 const IDEA_TYPES_SET = new Set(IDEA_TYPES);
 const POTENTIAL_LEVELS_SET = new Set(['high', 'medium', 'low']);
 const SYNTHESIS_MODES_SET = new Set(['research', 'startup', 'product', 'exploration']);
+const DEFAULT_EXPANSION_LENS = 'directions';
+const EXPANSION_LENS_INSTRUCTIONS = {
+  directions: 'Generate parallel strategic directions or themes at the same level of abstraction.',
+  deeper: 'Go deeper into this idea with mechanisms, details, or root causes at one consistent level.',
+  alternatives: 'Generate genuinely different alternatives that pursue the same outcome.',
+  risks: 'Identify distinct failure modes, obstacles, or unintended consequences.',
+  assumptions: 'Surface distinct assumptions or beliefs that require evidence.',
+  applications: 'Generate concrete applications or use cases at the same level of specificity.',
+  next_steps: 'Generate concrete next steps, tests, or evidence-gathering actions.'
+};
 
 function normalizeSentence(value, maxLength = 180) {
   if (typeof value !== 'string') return '';
@@ -115,6 +125,7 @@ const seedResponseSchema = {
 
 const ideaNodesResponseSchema = {
   type: Type.ARRAY,
+  minItems: 3,
   maxItems: 5,
   items: {
     type: Type.OBJECT,
@@ -272,15 +283,51 @@ function addApiRoute(method, path, handler) {
   app[method]([`/api${path}`, path], handler);
 }
 
-function normalizeIdeaNodes(rawNodes, topic) {
+function buildIdeaFallbacks(shortTopic, expansionLens) {
+  const fallbacks = {
+    directions: [
+      { type: 'opportunity', content: `Pursue customer value through ${shortTopic}` },
+      { type: 'opportunity', content: `Pursue operational efficiency through ${shortTopic}` },
+      { type: 'opportunity', content: `Pursue strategic differentiation through ${shortTopic}` }
+    ],
+    deeper: [
+      { type: 'method', content: `Examine the user behavior driving ${shortTopic}` },
+      { type: 'method', content: `Examine the process dynamics driving ${shortTopic}` },
+      { type: 'method', content: `Examine the resource constraints shaping ${shortTopic}` }
+    ],
+    alternatives: [
+      { type: 'method', content: `Replace ${shortTopic} with a lower-cost approach` },
+      { type: 'method', content: `Replace ${shortTopic} with a human-led approach` },
+      { type: 'method', content: `Replace ${shortTopic} with an incremental approach` }
+    ],
+    risks: [
+      { type: 'problem', content: `Adoption could stall around ${shortTopic}` },
+      { type: 'problem', content: `Execution bottlenecks could weaken ${shortTopic}` },
+      { type: 'problem', content: `${shortTopic} could create unintended consequences` }
+    ],
+    assumptions: [
+      { type: 'assumption', content: `Users genuinely want ${shortTopic}` },
+      { type: 'assumption', content: `${shortTopic} is feasible with available resources` },
+      { type: 'assumption', content: `Stakeholders will support ${shortTopic}` }
+    ],
+    applications: [
+      { type: 'application', content: `Apply ${shortTopic} in a focused pilot` },
+      { type: 'application', content: `Apply ${shortTopic} in an adjacent workflow` },
+      { type: 'application', content: `Apply ${shortTopic} where impact is measurable` }
+    ],
+    next_steps: [
+      { type: 'method', content: `Run the smallest useful test of ${shortTopic}` },
+      { type: 'method', content: `Gather evidence from affected users of ${shortTopic}` },
+      { type: 'method', content: `Define a decision checkpoint for ${shortTopic}` }
+    ]
+  };
+  return (fallbacks[expansionLens] || fallbacks[DEFAULT_EXPANSION_LENS])
+    .map((node) => ({ ...node, expandable: true }));
+}
+
+function normalizeIdeaNodes(rawNodes, topic, expansionLens = DEFAULT_EXPANSION_LENS) {
   const shortTopic = normalizeSentence(topic, 40) || 'this topic';
-  const fallback = [
-    { type: 'problem', content: `What blocks progress on ${shortTopic}?`, expandable: true },
-    { type: 'method', content: `How can we test assumptions about ${shortTopic} quickly?`, expandable: true },
-    { type: 'application', content: `Which concrete use case of ${shortTopic} should be validated first?`, expandable: true },
-    { type: 'assumption', content: `Which hidden constraint about ${shortTopic} could make this fail?`, expandable: true },
-    { type: 'opportunity', content: `Where could ${shortTopic} create disproportionate value?`, expandable: true }
-  ];
+  const fallback = buildIdeaFallbacks(shortTopic, expansionLens);
 
   const unique = [];
   const seenContent = new Set();
@@ -301,7 +348,7 @@ function normalizeIdeaNodes(rawNodes, topic) {
   });
 
   fallback.forEach((node) => {
-    if (unique.length >= 5) return;
+    if (unique.length >= 3) return;
     const dedupeKey = node.content.toLowerCase();
     if (seenContent.has(dedupeKey)) return;
     seenContent.add(dedupeKey);
@@ -543,6 +590,11 @@ addApiRoute('post', '/generate-ideas', async (req, res) => {
     const objective = normalizeSentence(context.objective, 220);
     const guidingQuestions = normalizeStringArray(context.guiding_questions, 3, 160);
     const parentChain = normalizeStringArray(context.parentChain, 8, 100);
+    const requestedLens = normalizeSentence(context.expansion_lens, 40);
+    const expansionLens = Object.prototype.hasOwnProperty.call(EXPANSION_LENS_INSTRUCTIONS, requestedLens)
+      ? requestedLens
+      : DEFAULT_EXPANSION_LENS;
+    const lensInstruction = EXPANSION_LENS_INSTRUCTIONS[expansionLens];
 
     const contextSection = [
       objective ? `Objective: ${objective}` : null,
@@ -557,23 +609,29 @@ ${contextSection}
 Focus node:
 ${JSON.stringify(topic)}
 
-Generate exactly 5 idea nodes that branch from the focus node.
+Expansion lens: ${expansionLens}
+${lensInstruction}
+
+Generate 3 to 5 idea nodes that branch from the focus node. Stop when additional ideas would be repetitive or weaker.
 
 Rules:
 - Each idea is ONE crisp, self-contained thought, under 14 words.
-- Make the 5 ideas maximally different from each other — a distinct angle each, no overlap.
+- Every child must answer the selected expansion lens.
+- Keep all children parallel: the same abstraction level and the same kind of relationship to the parent.
+- Do not mix causes, solutions, risks, applications, and next steps in one sibling set unless the selected lens asks for that kind.
+- Make the ideas meaningfully different from each other, with no overlap.
 - Be concrete and specific; never vague or generic.
 - Favor ideas that are testable, provocative, or directly decision-relevant.
 - Do not echo wording already used in the current path.
-- Use a mix of types and include at least one "problem", one "method", and one "application".
+- Assign the most accurate type to each idea as metadata only. There is no required type mix.
 
 Allowed types: problem, method, application, assumption, opportunity.
 
-Return a JSON array of exactly 5 objects, each:
+Return a JSON array of 3 to 5 objects, each:
 { "type": "problem | method | application | assumption | opportunity", "content": "string", "expandable": true }`;
 
     const parsed = await runStructuredPrompt(FLASH_MODEL_NAME, prompt, ideaNodesResponseSchema, 0.7);
-    const ideaNodes = normalizeIdeaNodes(parsed, topic);
+    const ideaNodes = normalizeIdeaNodes(parsed, topic, expansionLens);
 
     return res.json(ideaNodes);
   } catch (error) {
@@ -774,6 +832,7 @@ if (isDirectRun) {
 export default app;
 export {
   normalizeDirections,
+  normalizeIdeaNodes,
   normalizeInputIdeas,
   normalizeSentence,
   normalizeStringArray,

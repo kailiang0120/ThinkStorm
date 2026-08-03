@@ -23,7 +23,7 @@ import RotatingText from "./reactbits/RotatingText";
 import CountUp from "./reactbits/CountUp";
 import { SeedReviewPanel, IdeaWorkbench, StructureReviewPanel } from "./WorkflowPanel";
 import {
-  ZapIcon, SparklesIcon, PlusIcon, MinusIcon, CrosshairIcon, MaximizeIcon,
+  SparklesIcon, PlusIcon, MinusIcon, CrosshairIcon, MaximizeIcon,
   RefreshIcon, LayersIcon, TrashIcon, TargetIcon, ArrowRightIcon,
   MouseIcon, CloseIcon, DownloadIcon
 } from "./Icons";
@@ -290,6 +290,7 @@ export default function BrainCanvas() {
   const [activeNodeId, setActiveNodeId] = useState(null);
   const [thinkingChain, setThinkingChain] = useState([]);
   const [currentRound, setCurrentRound] = useState(1);
+  const [expansionLens, setExpansionLens] = useState("directions");
 
   // Camera state
   const [viewOffset, setViewOffset] = useState({ x: 0, y: 0 });
@@ -639,13 +640,13 @@ export default function BrainCanvas() {
     const payload = {
       currentStage, inputValue, seedData, allNodes, activeNodeId,
       thinkingChain, currentRound, hintDismissed, directions, synthesis,
-      selectedDirectionId, evaluationCriteria, directionScores, commitment
+      selectedDirectionId, evaluationCriteria, directionScores, commitment, expansionLens
     };
     const timer = window.setTimeout(() => {
       safeStorage.set(SESSION_STORAGE_KEY, JSON.stringify(payload));
     }, 400);
     return () => window.clearTimeout(timer);
-  }, [currentStage, inputValue, seedData, allNodes, activeNodeId, thinkingChain, currentRound, hintDismissed, directions, synthesis, selectedDirectionId, evaluationCriteria, directionScores, commitment]);
+  }, [currentStage, inputValue, seedData, allNodes, activeNodeId, thinkingChain, currentRound, hintDismissed, directions, synthesis, selectedDirectionId, evaluationCriteria, directionScores, commitment, expansionLens]);
 
   // Camera state — its own tiny key, and a longer debounce.
   useEffect(() => {
@@ -668,6 +669,7 @@ export default function BrainCanvas() {
     setActiveNodeId(savedSession.activeNodeId || null);
     setThinkingChain(savedSession.thinkingChain || []);
     setCurrentRound(savedSession.currentRound || getHighestRound(savedSession.allNodes));
+    setExpansionLens(savedSession.expansionLens || "directions");
     setViewOffset(nextOffset);
     setZoom(nextZoom);
     setHintDismissed(true);
@@ -717,6 +719,7 @@ export default function BrainCanvas() {
       setAllNodes([]);
       setActiveNodeId(null);
       setCurrentRound(1);
+      setExpansionLens("directions");
       setThinkingChain([inputValue]);
       setDirections([]);
       setSynthesis(null);
@@ -785,7 +788,8 @@ export default function BrainCanvas() {
       const ideas = await generateIdeaNodes(focus.content, {
         objective: seedData.objective,
         guiding_questions: seedData.guiding_questions,
-        parentChain
+        parentChain,
+        expansion_lens: expansionLens
       });
       pushWorkflowHistory("generate AI ideas");
       const children = filterFreshIdeas(ideas, allNodes).map((idea) => ({
@@ -797,7 +801,8 @@ export default function BrainCanvas() {
         round: currentRound,
         expanded: false,
         origin: "ai",
-        status: "new"
+        status: "new",
+        lens: expansionLens
       }));
       const next = allNodes
         .map((node) => (node.id === focus.id ? { ...node, expanded: true } : node))
@@ -840,7 +845,8 @@ export default function BrainCanvas() {
       const ideas = await generateIdeaNodes(node.content, {
         objective: seedData?.objective,
         guiding_questions: seedData?.guiding_questions,
-        parentChain
+        parentChain,
+        expansion_lens: expansionLens
       });
       const children = filterFreshIdeas(ideas, allNodes).map((idea) => ({
         id: createNodeId("idea"),
@@ -851,7 +857,8 @@ export default function BrainCanvas() {
         round: nodeRound,
         expanded: false,
         origin: "ai",
-        status: "new"
+        status: "new",
+        lens: expansionLens
       }));
       pushWorkflowHistory("expand idea");
       const next = allNodes
@@ -963,7 +970,8 @@ export default function BrainCanvas() {
       const ideas = await generateIdeaNodes(active.content, {
         objective: seedData?.objective,
         guiding_questions: seedData?.guiding_questions,
-        parentChain
+        parentChain,
+        expansion_lens: expansionLens
       });
       const children = filterFreshIdeas(ideas, allNodes).map((idea) => ({
         id: createNodeId("idea"),
@@ -975,7 +983,8 @@ export default function BrainCanvas() {
         expanded: false,
         origin: "ai",
         status: "new",
-        variantOf: active.id
+        variantOf: active.id,
+        lens: expansionLens
       }));
       pushWorkflowHistory("generate an alternative branch");
       const next = allNodes
@@ -1177,6 +1186,7 @@ export default function BrainCanvas() {
       pushWorkflowHistory("start a follow-up web");
       setAllNodes(next);
       setCurrentRound(nextRound);
+      setExpansionLens("directions");
       setActiveNodeId(rootId);
       setSeedData((prev) => ({ ...(prev || {}), objective: newObjective, currentTopic: newTopic }));
       setThinkingChain([newTopic]);
@@ -1234,6 +1244,7 @@ export default function BrainCanvas() {
     setActiveNodeId(null);
     setThinkingChain([]);
     setCurrentRound(1);
+    setExpansionLens("directions");
     setViewOffset({ x: 0, y: 0 });
     setZoom(1);
     setHintDismissed(false);
@@ -1262,7 +1273,7 @@ export default function BrainCanvas() {
   const dockItems = [
     ...(currentStage === STAGES.EXPAND ? [{
       key: "ai-starters",
-      label: "Ask AI for five fresh angles",
+      label: "Ask AI using selected lens",
       icon: <SparklesIcon size={18} />,
       onClick: handleGenerateStarters,
       disabled: isLoading,
@@ -1362,7 +1373,9 @@ export default function BrainCanvas() {
       {currentStage > STAGES.INPUT && (
       <Motion.header className="canvas-header" ref={headerRef} initial={{ y: -50, opacity: 0 }} animate={{ y: 0, opacity: 1 }}>
         <h1 className="logo">
-          <span className="logo-icon"><ZapIcon size={19} /></span>
+          <span className="logo-icon" aria-hidden="true">
+            <img src="/thinkstorm-logo.png" alt="" />
+          </span>
           ThinkStorm
         </h1>
 
@@ -1609,6 +1622,8 @@ export default function BrainCanvas() {
           key={activeNode?.id || "no-active-node"}
           activeNode={activeNode}
           ideaCount={currentRoundIdeas.length}
+          expansionLens={expansionLens}
+          onExpansionLensChange={setExpansionLens}
           onAddIdea={handleAddIdea}
           onGenerateStarters={handleGenerateStarters}
           onSaveNode={handleSaveNode}

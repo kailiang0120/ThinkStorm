@@ -1,11 +1,15 @@
 <p align="center">
+  <img src="public/thinkstorm-logo.png" alt="ThinkStorm logo" width="112">
+</p>
+
+<p align="center">
   <img src="https://img.shields.io/badge/React-19-61DAFB?style=for-the-badge&logo=react&logoColor=white" alt="React">
   <img src="https://img.shields.io/badge/Gemini-3%20Flash-4285F4?style=for-the-badge&logo=google&logoColor=white" alt="Gemini AI">
   <img src="https://img.shields.io/badge/Vite-7-646CFF?style=for-the-badge&logo=vite&logoColor=white" alt="Vite">
   <img src="https://img.shields.io/badge/License-Apache%202.0-green?style=for-the-badge" alt="License">
 </p>
 
-# ⚡ ThinkStorm
+# ThinkStorm
 
 **AI-Powered Visual Brainstorming with Interactive Mind Maps**
 
@@ -151,9 +155,14 @@ ThinkStorm/
 
 ---
 
-## 🎨 Node Types
+## 🎨 Expansion Lenses and Node Types
 
-Each generated idea is classified into one of five types:
+Each AI expansion uses one thinking lens at a time—strategic directions, deeper analysis,
+alternatives, risks, assumptions, applications, or next steps—and returns 3–5 parallel
+sibling ideas. It stops before weaker or repetitive branches are added.
+
+The five node types are descriptive tags for scanning the canvas. They are not a required
+set of branches, and an expansion may use the same type for every sibling when appropriate:
 
 | Type | Icon | Color | Description |
 |------|------|-------|-------------|

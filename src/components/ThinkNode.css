@@ -93,6 +93,15 @@
   margin-bottom: 9px;
 }
 
+.node-root-logo {
+  width: 15px;
+  height: 15px;
+  object-fit: contain;
+  padding: 1px;
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.94);
+}
+
 /* Active node */
 .think-node.active:not(.root) {
   border-color: var(--node-color);

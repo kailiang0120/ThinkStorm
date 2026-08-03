@@ -1,5 +1,34 @@
 import { describe, expect, it } from 'vitest';
-import { normalizeDirections, normalizeInputIdeas, normalizeSynthesis } from './server.js';
+import { normalizeDirections, normalizeIdeaNodes, normalizeInputIdeas, normalizeSynthesis } from './server.js';
+
+describe('normalizeIdeaNodes', () => {
+  it('preserves an adaptive idea count between three and five', () => {
+    const ideas = normalizeIdeaNodes([
+      { type: 'method', content: 'Offer a guided setup path' },
+      { type: 'method', content: 'Offer a self-service setup path' },
+      { type: 'method', content: 'Offer a concierge setup path' },
+      { type: 'method', content: 'Offer a partner-led setup path' }
+    ], 'Improve onboarding', 'alternatives');
+
+    expect(ideas).toHaveLength(4);
+    expect(ideas.map((idea) => idea.content)).toEqual([
+      'Offer a guided setup path',
+      'Offer a self-service setup path',
+      'Offer a concierge setup path',
+      'Offer a partner-led setup path'
+    ]);
+  });
+
+  it('pads short responses only to three with lens-specific fallbacks', () => {
+    const ideas = normalizeIdeaNodes([
+      { type: 'problem', content: 'Customers may resist the change' }
+    ], 'A new onboarding flow', 'risks');
+
+    expect(ideas).toHaveLength(3);
+    expect(ideas.every((idea) => idea.type === 'problem')).toBe(true);
+    expect(ideas[0].content).toBe('Customers may resist the change');
+  });
+});
 
 describe('normalizeInputIdeas', () => {
   it('keeps valid unique ideas and drops malformed entries', () => {

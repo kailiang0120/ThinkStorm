@@ -9,6 +9,15 @@ import {
 } from "./Icons";
 
 const IDEA_TYPES = ["problem", "method", "application", "assumption", "opportunity"];
+const EXPANSION_LENSES = [
+  { value: "directions", label: "Strategic directions", help: "Parallel routes at the same level" },
+  { value: "deeper", label: "Go deeper", help: "Mechanisms, details, and root causes" },
+  { value: "alternatives", label: "Find alternatives", help: "Different ways to achieve the same outcome" },
+  { value: "risks", label: "Identify risks", help: "Failure modes and unintended consequences" },
+  { value: "assumptions", label: "Challenge assumptions", help: "Beliefs that need evidence" },
+  { value: "applications", label: "Find applications", help: "Concrete use cases and contexts" },
+  { value: "next_steps", label: "Suggest next steps", help: "Tests, evidence, and decisions" }
+];
 
 export function SeedReviewPanel({ seedData, onChange, onConfirm, onBack, isLoading }) {
   if (!seedData) return null;
@@ -70,6 +79,8 @@ export function SeedReviewPanel({ seedData, onChange, onConfirm, onBack, isLoadi
 export function IdeaWorkbench({
   activeNode,
   ideaCount,
+  expansionLens = "directions",
+  onExpansionLensChange,
   onAddIdea,
   onGenerateStarters,
   onSaveNode,
@@ -91,6 +102,7 @@ export function IdeaWorkbench({
   };
 
   const isEditableIdea = activeNode && !activeNode.isRoot;
+  const selectedLens = EXPANSION_LENSES.find((lens) => lens.value === expansionLens) || EXPANSION_LENSES[0];
 
   return (
     <aside className="workflow-panel idea-workbench" aria-labelledby="idea-workbench-title">
@@ -105,6 +117,14 @@ export function IdeaWorkbench({
       <p className="workflow-panel-intro">
         Add your own thoughts first, then ask AI for different angles. Nothing is final until you choose it.
       </p>
+
+      <label className="lens-selector">
+        <span>AI expansion lens</span>
+        <select value={expansionLens} onChange={(event) => onExpansionLensChange?.(event.target.value)} disabled={isLoading}>
+          {EXPANSION_LENSES.map((lens) => <option key={lens.value} value={lens.value}>{lens.label}</option>)}
+        </select>
+        <small>{selectedLens.help}. Every generated child will use this one lens.</small>
+      </label>
 
       <form className="idea-capture-form" onSubmit={submitIdea}>
         <textarea
@@ -127,7 +147,7 @@ export function IdeaWorkbench({
       </form>
 
       <button type="button" className="workflow-btn ai-action" onClick={onGenerateStarters} disabled={isLoading}>
-        <SparklesIcon size={15} /> Ask AI for five fresh angles
+        <SparklesIcon size={15} /> Ask AI: {selectedLens.label}
       </button>
 
       {isEditableIdea && (

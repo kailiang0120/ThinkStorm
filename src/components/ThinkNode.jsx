@@ -1,6 +1,6 @@
 import { memo, useCallback } from "react";
 import { motion as Motion } from "motion/react";
-import { CategoryIcon, ZapIcon, PlusIcon } from "./Icons";
+import { CategoryIcon, PlusIcon } from "./Icons";
 import SpotlightCard from "./reactbits/SpotlightCard";
 import GlareHover from "./reactbits/GlareHover";
 import "./ThinkNode.css";
@@ -66,7 +66,7 @@ function ThinkNode({
     <>
       {isRoot ? (
         <span className="node-root-badge">
-          <ZapIcon size={15} />
+          <img className="node-root-logo" src="/thinkstorm-logo.png" alt="" aria-hidden="true" />
           Topic
         </span>
       ) : (

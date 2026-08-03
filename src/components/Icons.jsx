@@ -23,12 +23,6 @@ function Svg({ size, children, ...props }) {
   );
 }
 
-export const ZapIcon = (p) => (
-  <Svg {...p}>
-    <path d="M13 2 4.5 13.5a.6.6 0 0 0 .5 1H11l-1 7.5L18.5 10a.6.6 0 0 0-.5-1H12l1-7Z" fill="currentColor" stroke="none" />
-  </Svg>
-);
-
 export const SparklesIcon = (p) => (
   <Svg {...p}>
     <path d="M12 3v4M12 17v4M5 12H1M23 12h-4M6.3 6.3 4 4M20 20l-2.3-2.3M17.7 6.3 20 4M4 20l2.3-2.3" />
