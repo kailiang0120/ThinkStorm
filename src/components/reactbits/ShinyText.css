@@ -1,0 +1,36 @@
+/* `color` is deliberately NOT set to transparent here. currentColor in the
+   background resolves against this element's own `color`, so zeroing it made
+   the whole gradient transparent and the text invisible. -webkit-text-fill-color
+   hides the painted glyphs without touching the value currentColor reads. */
+.shiny-text {
+  background: linear-gradient(
+    120deg,
+    currentColor 40%,
+    color-mix(in srgb, currentColor 25%, #ffffff) 50%,
+    currentColor 60%
+  );
+  background-size: 200% 100%;
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+  animation: shiny-sweep var(--shine-speed) linear infinite;
+}
+
+.shiny-text.is-disabled {
+  animation: none;
+  background: none;
+  -webkit-text-fill-color: currentColor;
+}
+
+@keyframes shiny-sweep {
+  0% { background-position: 200% 0; }
+  100% { background-position: -200% 0; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .shiny-text {
+    animation: none;
+    background: none;
+    -webkit-text-fill-color: currentColor;
+  }
+}

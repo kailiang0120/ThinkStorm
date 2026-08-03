@@ -106,4 +106,13 @@ describe('normalizeSynthesis', () => {
       potential: 'medium'
     });
   });
+
+  it('anchors the recommended direction to an explicit user selection', () => {
+    const synthesis = normalizeSynthesis({ comparison: { most_promising: 'D1' } }, directions, 'Choose a path', {
+      selected_direction_id: 'D2',
+      criteria: [{ label: 'Feasibility', weight: 4 }]
+    });
+
+    expect(synthesis.comparison.most_promising).toBe('D2');
+  });
 });

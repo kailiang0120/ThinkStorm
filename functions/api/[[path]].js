@@ -12,6 +12,51 @@ const DEFAULT_ALLOWED_ORIGINS = [
   'http://127.0.0.1:4173'
 ];
 
+const DEFAULT_RATE_LIMIT_WINDOW_MS = 15 * 60 * 1000;
+const DEFAULT_RATE_LIMIT_MAX = 60;
+const MAX_BODY_BYTES = 1_000_000; // mirrors express.json({ limit: '1mb' })
+
+/**
+ * Best-effort sliding-window rate limiter.
+ *
+ * This is per-isolate state, so the effective ceiling is (limit x number of
+ * live isolates) rather than a hard global cap — Cloudflare spins up isolates
+ * per colo and recycles them freely. It still stops the case this is here for:
+ * a single client hammering one endpoint on a warm isolate. Swap in a Durable
+ * Object or the Workers rate-limiting binding if a strict global cap matters.
+ */
+const rateLimitBuckets = new Map();
+
+function checkRateLimit(request, env) {
+  const windowMs = Number(env.RATE_LIMIT_WINDOW_MS) || DEFAULT_RATE_LIMIT_WINDOW_MS;
+  const limit = Number(env.RATE_LIMIT_MAX) || DEFAULT_RATE_LIMIT_MAX;
+  if (limit <= 0) return { allowed: true };
+
+  const key = request.headers.get('CF-Connecting-IP')
+    || request.headers.get('X-Forwarded-For')
+    || 'unknown';
+  const now = Date.now();
+  const hits = (rateLimitBuckets.get(key) || []).filter((time) => now - time < windowMs);
+
+  if (hits.length >= limit) {
+    rateLimitBuckets.set(key, hits);
+    return { allowed: false, retryAfter: Math.ceil((windowMs - (now - hits[0])) / 1000) };
+  }
+
+  hits.push(now);
+  rateLimitBuckets.set(key, hits);
+
+  // Opportunistic sweep so an isolate that lives a long time cannot grow
+  // an unbounded map of stale keys.
+  if (rateLimitBuckets.size > 5000) {
+    for (const [bucketKey, times] of rateLimitBuckets) {
+      if (!times.length || now - times[times.length - 1] >= windowMs) rateLimitBuckets.delete(bucketKey);
+    }
+  }
+
+  return { allowed: true };
+}
+
 function normalizeSentence(value, maxLength = 180) {
   if (typeof value !== 'string') return '';
   return value.replace(/\s+/g, ' ').trim().slice(0, maxLength);
@@ -161,6 +206,10 @@ function buildApiErrorResponse(error, fallbackMessage) {
   const message = normalizeSentence(error?.message, 260);
   const status = Number(error?.status);
 
+  if (status === 413) {
+    return { status: 413, payload: { error: 'Request body is too large.' } };
+  }
+
   if (/api key was reported as leaked/i.test(message)) {
     return {
       status: 401,
@@ -207,9 +256,28 @@ function buildApiErrorResponse(error, fallbackMessage) {
   };
 }
 
+/**
+ * Read the JSON body, refusing anything over the size cap.
+ * Throws a tagged error so the route can answer 413 instead of a generic 500.
+ */
 async function readJsonBody(request) {
+  const declared = Number(request.headers.get('Content-Length'));
+  if (Number.isFinite(declared) && declared > MAX_BODY_BYTES) {
+    const error = new Error('Request body is too large.');
+    error.status = 413;
+    throw error;
+  }
+
+  // Content-Length can be absent (chunked); measure what actually arrives.
+  const text = await request.text();
+  if (text.length > MAX_BODY_BYTES) {
+    const error = new Error('Request body is too large.');
+    error.status = 413;
+    throw error;
+  }
+
   try {
-    return await request.json();
+    return JSON.parse(text || '{}');
   } catch {
     return {};
   }
@@ -360,7 +428,7 @@ function normalizeDirections(rawDirections, ideaNodes) {
   }));
 }
 
-function normalizeSynthesis(rawSynthesis, directions, objective) {
+function normalizeSynthesis(rawSynthesis, directions, objective, evaluation = null) {
   const directionIds = directions.map((direction) => direction.direction_id);
   const directionIdSet = new Set(directionIds);
 
@@ -399,9 +467,13 @@ function normalizeSynthesis(rawSynthesis, directions, objective) {
   const fallbackMostPromising = directionsAnalysis.find((item) => item.potential === 'high')?.direction_id
     || directionIds[0]
     || 'D1';
-  const mostPromising = directionIdSet.has(rawSynthesis?.comparison?.most_promising)
+  const selectedDirectionId = directionIdSet.has(evaluation?.selected_direction_id)
+    ? evaluation.selected_direction_id
+    : null;
+  const mostPromising = selectedDirectionId
+    || (directionIdSet.has(rawSynthesis?.comparison?.most_promising)
     ? rawSynthesis.comparison.most_promising
-    : fallbackMostPromising;
+    : fallbackMostPromising);
 
   return {
     problem_statement: {
@@ -585,11 +657,35 @@ async function synthesize(request, env) {
         direction_id: normalizeSentence(direction?.direction_id, 12),
         title: normalizeSentence(direction?.title, 60),
         summary: normalizeSentence(direction?.summary, 220),
-        idea_ids: normalizeStringArray(direction?.idea_ids, 20, 80)
+        idea_ids: normalizeStringArray(direction?.idea_ids, 80, 80)
       }))
       .filter((direction) => direction.direction_id && direction.title)
     : [];
   const ideaNodes = normalizeInputIdeas(body?.ideaNodes);
+  const rawEvaluation = body?.evaluation && typeof body.evaluation === 'object' ? body.evaluation : {};
+  const evaluation = {
+    selected_direction_id: normalizeSentence(rawEvaluation.selected_direction_id, 12),
+    criteria: Array.isArray(rawEvaluation.criteria)
+      ? rawEvaluation.criteria
+        .map((criterion) => ({
+          label: normalizeSentence(criterion?.label, 80),
+          weight: Math.min(5, Math.max(1, Number(criterion?.weight) || 1))
+        }))
+        .filter((criterion) => criterion.label)
+        .slice(0, 8)
+      : [],
+    scores: rawEvaluation.scores && typeof rawEvaluation.scores === 'object'
+      ? Object.fromEntries(Object.entries(rawEvaluation.scores).slice(0, 12).map(([directionId, values]) => [
+        normalizeSentence(directionId, 12),
+        values && typeof values === 'object'
+          ? Object.fromEntries(Object.entries(values).slice(0, 12).map(([criterionId, score]) => [
+            normalizeSentence(criterionId, 40),
+            Math.min(5, Math.max(1, Number(score) || 1))
+          ]))
+          : {}
+      ]))
+      : {}
+  };
 
   if (!directions.length) {
     return { status: 400, payload: { error: 'directions are required before synthesis' } };
@@ -616,11 +712,15 @@ ${JSON.stringify(objective)}
 Directions:
 ${directionsText}
 
+User evaluation:
+${JSON.stringify(evaluation)}
+
 Task:
 1. Restate the core goal.
 2. Analyze every direction with value, risks, unknowns, and potential.
 3. Compare directions and select most promising.
 4. Propose concrete next actions.
+5. Treat the user's selected direction and weighted criteria as the decision context. Analyze alternatives honestly, but keep the selected direction as the recommended direction unless the user selection is clearly unsupported.
 
 Potential must be one of: high, medium, low.
 Detected mode must be one of: research, startup, product, exploration.
@@ -672,15 +772,27 @@ Return JSON only:
     );
   }
 
-  return { status: 200, payload: normalizeSynthesis(parsed, directions, objective) };
+  return { status: 200, payload: normalizeSynthesis(parsed, directions, objective, evaluation) };
+}
+
+/** Length-independent, constant-time string comparison. */
+function safeEqual(a, b) {
+  if (typeof a !== 'string' || typeof b !== 'string' || a.length !== b.length) return false;
+  let mismatch = 0;
+  for (let i = 0; i < a.length; i += 1) {
+    mismatch |= a.charCodeAt(i) ^ b.charCodeAt(i);
+  }
+  return mismatch === 0;
 }
 
 function validateRequestToken(request, env, path) {
-  if (!env.API_REQUEST_TOKEN || request.method === 'GET' && path === '/health') return true;
+  // Parenthesised: the health check is exempt, and so is an unset token.
+  if (!env.API_REQUEST_TOKEN) return true;
+  if (request.method === 'GET' && path === '/health') return true;
 
   const authHeader = request.headers.get('Authorization') || '';
   const bearerToken = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : '';
-  return (request.headers.get('X-ThinkStorm-Token') || bearerToken) === env.API_REQUEST_TOKEN;
+  return safeEqual(request.headers.get('X-ThinkStorm-Token') || bearerToken, env.API_REQUEST_TOKEN);
 }
 
 export async function onRequest(context) {
@@ -694,6 +806,18 @@ export async function onRequest(context) {
 
   if (!validateRequestToken(request, env, path)) {
     return jsonResponse(request, env, 401, { error: 'Missing or invalid request token.' });
+  }
+
+  // Every Gemini-backed route costs quota, so meter them. /health stays free.
+  if (path !== '/health') {
+    const { allowed, retryAfter } = checkRateLimit(request, env);
+    if (!allowed) {
+      const response = jsonResponse(request, env, 429, {
+        error: 'Too many requests. Please wait before asking Gemini for more output.'
+      });
+      response.headers.set('Retry-After', String(retryAfter));
+      return response;
+    }
   }
 
   try {

@@ -4,8 +4,15 @@
   z-index: 10;
 }
 
-.think-node {
+/* Motion + overflow-visible layer. The ring and the expand hint live here
+   because the card itself (SpotlightCard / GlareHover) clips overflow. */
+.think-node-shell {
   --node-color: var(--c-opportunity);
+  position: relative;
+  display: block;
+}
+
+.think-node {
   position: relative;
   width: max-content;
   min-width: 200px;
@@ -128,7 +135,8 @@
   transition: opacity 0.2s ease, transform 0.2s ease;
 }
 
-.think-node:hover .node-expand-hint {
+.think-node-shell:hover .node-expand-hint,
+.think-node-shell:focus-within .node-expand-hint {
   opacity: 1;
 }
 
@@ -142,7 +150,7 @@
   pointer-events: none;
 }
 
-.think-node.root .node-ring {
+.think-node-shell.root .node-ring {
   inset: -7px;
   border-radius: calc(var(--radius) + 7px);
   border-color: rgba(37, 117, 230, 0.5);
@@ -151,4 +159,34 @@
 @keyframes node-pulse {
   0% { transform: scale(1); opacity: 0.9; }
   100% { transform: scale(1.14); opacity: 0; }
+}
+
+/* ===== Compact tier =====
+   Mirrors METRICS.compact in BrainCanvas.jsx. Change one, change the other:
+   the forest layout reserves vertical space from those numbers, so cards that
+   render larger than the metrics assume will overlap their siblings. */
+@media (max-width: 768px) {
+  .think-node {
+    min-width: 150px;
+    max-width: 220px;
+    padding: 11px 13px 12px;
+    font-size: 0.82rem;
+    border-left-width: 3px;
+    border-radius: var(--radius-xs);
+  }
+
+  .node-category { font-size: 0.56rem; margin-bottom: 5px; letter-spacing: 0.05em; }
+  .node-text { line-height: 1.4; }
+
+  .think-node.root {
+    min-width: 168px;
+    padding: 12px 15px 13px;
+    border-radius: var(--radius-sm);
+  }
+  .think-node.root .node-text { font-size: 0.9rem; }
+  .node-root-badge { font-size: 0.56rem; padding: 3px 8px; margin-bottom: 7px; }
+
+  .node-expand-hint { width: 19px; height: 19px; right: -8px; }
+  .node-ring { inset: -5px; border-radius: calc(var(--radius-xs) + 5px); }
+  .think-node-shell.root .node-ring { inset: -6px; border-radius: calc(var(--radius-sm) + 6px); }
 }

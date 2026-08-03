@@ -69,8 +69,8 @@ export async function clusterIntoDirections(ideaNodes, objective) {
  * Stage 4 — Synthesis Engine
  * Generates decision-oriented synthesis report
  */
-export async function generateSynthesis(objective, directions, ideaNodes) {
-  return await postJson('/synthesize', { objective, directions, ideaNodes });
+export async function generateSynthesis(objective, directions, ideaNodes, evaluation = null) {
+  return await postJson('/synthesize', { objective, directions, ideaNodes, evaluation });
 }
 
 /**
